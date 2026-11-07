@@ -137,3 +137,29 @@ if 'regs->pstate' in s:
     p.write_text(s.replace('regs->pstate', 'PT_REGS_PSTATE(regs)'))
     print('probes/kprobes.c: regs->pstate 改走 PT_REGS_PSTATE()')
 PY
+
+# 8) 父架构 probes/kprobes.c 剩下的真 arm64 专有写法：regs->pc、regs->regs[n] 在
+#    UML 的 pt_regs 里不存在（宿主寄存器收在 regs 里，走 PT_REGS_* 宏）；EL2 的
+#    hyp / hyp_idmap 文本段在 UML 上根本没有。
+python3 - "$K" <<'PY'
+import sys, pathlib
+K = pathlib.Path(sys.argv[1])
+p = K / 'arch/arm64/kernel/probes/kprobes.c'
+s = p.read_text()
+s = s.replace('regs->regs[29]', 'PT_REGS_X29(regs)')
+s = s.replace('regs->regs[30]', 'PT_REGS_X30(regs)')
+s = s.replace('regs->pc', 'PT_REGS_IP(regs)')
+hyp = """\tret = kprobe_add_area_blacklist((unsigned long)__hyp_text_start,
+\t\t\t\t\t(unsigned long)__hyp_text_end);
+\tif (ret || is_kernel_in_hyp_mode())
+\t\treturn ret;
+\tret = kprobe_add_area_blacklist((unsigned long)__hyp_idmap_text_start,
+\t\t\t\t\t(unsigned long)__hyp_idmap_text_end);
+"""
+if hyp in s and 'UML 没有 EL2' not in s:
+    s = s.replace(hyp,
+        '#ifndef CONFIG_UML\n/* UML 没有 EL2，不存在 hyp / hyp_idmap 文本段。 */\n'
+        + hyp + '#endif\n')
+p.write_text(s)
+print('probes/kprobes.c: pc/regs[] 走宏，hyp 段按 CONFIG_UML 屏蔽')
+PY
