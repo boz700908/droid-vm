@@ -1,15 +1,27 @@
-diff --git a/arch/arm64/kernel/module-plts.c b/arch/arm64/kernel/module-plts.c
-index e288b769d..19d041ef2 100644
---- a/arch/arm64/kernel/module-plts.c
-+++ b/arch/arm64/kernel/module-plts.c
-@@ -19,7 +19,6 @@
-  */
- #include <asm/insn.h>
+diff --git a/arch/arm64/kernel/probes/kprobes.c b/arch/arm64/kernel/probes/kprobes.c
+index 43a0361a8..c7dac0e3c 100644
+--- a/arch/arm64/kernel/probes/kprobes.c
++++ b/arch/arm64/kernel/probes/kprobes.c
+@@ -195,15 +195,15 @@ static void __kprobes set_current_kprobe(struct kprobe *p)
+ static void __kprobes kprobes_save_local_irqflag(struct kprobe_ctlblk *kcb,
+ 						struct pt_regs *regs)
+ {
+-	kcb->saved_irqflag = regs->pstate & DAIF_MASK;
+-	regs->pstate |= DAIF_MASK;
++	kcb->saved_irqflag = PT_REGS_PSTATE(regs) & DAIF_MASK;
++	PT_REGS_PSTATE(regs) |= DAIF_MASK;
+ }
  
--#include <asm/kvm_pkvm_module.h>
+ static void __kprobes kprobes_restore_local_irqflag(struct kprobe_ctlblk *kcb,
+ 						struct pt_regs *regs)
+ {
+-	regs->pstate &= ~DAIF_MASK;
+-	regs->pstate |= kcb->saved_irqflag;
++	PT_REGS_PSTATE(regs) &= ~DAIF_MASK;
++	PT_REGS_PSTATE(regs) |= kcb->saved_irqflag;
+ }
  
- static struct plt_entry __get_adrp_add_pair(u64 dst, u64 pc,
- 					    enum aarch64_insn_register reg)
+ static void __kprobes setup_singlestep(struct kprobe *p,
 diff --git a/arch/arm64/um/Makefile b/arch/arm64/um/Makefile
 index 751ffdb72..cd83894dc 100644
 --- a/arch/arm64/um/Makefile
@@ -28,24 +40,208 @@ index 751ffdb72..cd83894dc 100644
 +			 ../kernel/probes/simulate-insn.o
 +obj-$(CONFIG_KRETPROBES) += ../kernel/probes/kprobes_trampoline.o
 +obj-$(CONFIG_KPROBES) += kprobe-trap.o probe-mem.o
-diff --git a/arch/arm64/um/asm/text-patching.h b/arch/arm64/um/asm/text-patching.h
-index 2d88eb6cb..e1a39733a 100644
---- a/arch/arm64/um/asm/text-patching.h
-+++ b/arch/arm64/um/asm/text-patching.h
-@@ -65,3 +65,7 @@ void alternatives_smp_module_del(struct module *mod);
- #endif
- 
- #endif /* __UM_ARM64_TEXT_PATCHING_H */
+diff --git a/arch/arm64/um/asm/daifflags.h b/arch/arm64/um/asm/daifflags.h
+new file mode 100644
+index 000000000..23f9a7cfb
+--- /dev/null
++++ b/arch/arm64/um/asm/daifflags.h
+@@ -0,0 +1,61 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef __UM_ARM64_DAIFFLAGS_H
++#define __UM_ARM64_DAIFFLAGS_H
 +
-+#ifndef text_poke_copy
-+#define text_poke_copy text_poke_copy
++/*
++ * arm64 的 <asm/daifflags.h> 直接读写 DAIF 系统寄存器，UML 上没有这个寄存器：
++ * 本地中断在 UML 里是靠屏蔽宿主信号实现的（arch/um/include/asm/irqflags.h），
++ * 所以把 local_daif_* 整体映射到 arch_local_*。
++ *
++ * 被 arch/arm64/kernel/probes/kprobes.c 与 kernel/kprobes.c 用到。
++ */
++#include <linux/irqflags.h>
++#include <linux/types.h>
++
++struct pt_regs;
++
++#define DAIF_PROCCTX		0UL
++#define DAIF_PROCCTX_NOIRQ	0UL
++#define DAIF_ERRCTX		0UL
++#define DAIF_MASK		0UL
++
++/* UML 没有 DAIF.I 可查；调用点只用于决定是否要恢复，返回 false 最保守。 */
++static inline bool irqs_are_masked(void)
++{
++	return false;
++}
++
++static inline void local_daif_mask(void)
++{
++	arch_local_irq_disable();
++}
++
++static inline void local_daif_unmask(void)
++{
++	arch_local_irq_enable();
++}
++
++static inline unsigned long local_daif_save_flags(void)
++{
++	return arch_local_save_flags();
++}
++
++static inline unsigned long local_daif_save(void)
++{
++	unsigned long flags = arch_local_save_flags();
++
++	arch_local_irq_disable();
++	return flags;
++}
++
++static inline void local_daif_restore(unsigned long flags)
++{
++	arch_local_irq_restore(flags);
++}
++
++static inline void local_daif_inherit(struct pt_regs *regs)
++{
++	(void)regs;
++}
++
++#endif /* __UM_ARM64_DAIFFLAGS_H */
+diff --git a/arch/arm64/um/asm/debug-monitors.h b/arch/arm64/um/asm/debug-monitors.h
+index c9a4aa9df..ba584dc5d 100644
+--- a/arch/arm64/um/asm/debug-monitors.h
++++ b/arch/arm64/um/asm/debug-monitors.h
+@@ -12,4 +12,16 @@
+ #ifndef __UM_ARM64_DEBUG_MONITORS_H
+ #define __UM_ARM64_DEBUG_MONITORS_H
+ 
++
++#include <asm/brk-imm.h>
++#include <asm/insn-def.h>
++
++/* 装 kprobe 时把目标指令改写成 BRK；ESR 的 comment 字段区分是哪一种。 */
++#define BRK64_OPCODE_KPROBES	(AARCH64_BREAK_MON | (KPROBES_BRK_IMM << 5))
++#define BRK64_OPCODE_KPROBES_SS	(AARCH64_BREAK_MON | (KPROBES_BRK_SS_IMM << 5))
++
++/* 父架构 probes/kprobes.c 用这两个返回值表示 BRK 是否已被吃掉。 */
++#define DBG_HOOK_HANDLED	0
++#define DBG_HOOK_ERROR		1
++
+ #endif /* __UM_ARM64_DEBUG_MONITORS_H */
+diff --git a/arch/arm64/um/asm/gcs.h b/arch/arm64/um/asm/gcs.h
+new file mode 100644
+index 000000000..1a0288c51
+--- /dev/null
++++ b/arch/arm64/um/asm/gcs.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * ARCH=um SUBARCH=arm64 的 <asm/gcs.h>。
++ *
++ * GCS（Guarded Control Stack）是真 arm64 硬件特性，UML guest 没有，恒为未启用。
++ * 真头里有 .inst/sys 内联汇编并 include <asm/uaccess.h>（进而 <asm/memory.h>），
++ * 在 UML 上编不过；kernel/probes/simulate-insn.c 只用到下面三个入口。
++ */
++#ifndef __UM_ARM64_GCS_H
++#define __UM_ARM64_GCS_H
++
++struct task_struct;
++
++static inline bool task_gcs_el0_enabled(struct task_struct *task)
++{
++	return false;
++}
++
++static inline void push_user_gcs(unsigned long val, int *err) { }
++
++static inline u64 pop_user_gcs(int *err)
++{
++	*err = -EINVAL;
++	return 0;
++}
++
++#endif /* __UM_ARM64_GCS_H */
+diff --git a/arch/arm64/um/asm/kprobes.h b/arch/arm64/um/asm/kprobes.h
+index 511755ff8..fccbe1b7a 100644
+--- a/arch/arm64/um/asm/kprobes.h
++++ b/arch/arm64/um/asm/kprobes.h
+@@ -1,18 +1,24 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ /*
+- * ARCH=um SUBARCH=arm64 has no kprobes.
++ * ARCH=um SUBARCH=arm64 的 <asm/kprobes.h>。
+  *
+- * arch/arm64/lib/insn.c is reused here for instruction encoding and tags some
+- * of its functions __kprobes, which is a section annotation rather than a
+- * dependency on the kprobes machinery. The generic header supplies it.
++ * 默认（CONFIG_KPROBES=n）只需要 __kprobes 这个段标注可用：arch/arm64/lib/insn.c
++ * 被复用来做指令编解码，里面的函数标了 __kprobes，那只是段标注，不依赖 kprobes
++ * 机制本身。而 arm64 的真头会经 asm/probes.h 牵出 cpufeature 一整套，白白拖进
++ * cpucap-defs.h，所以默认保持 asm-generic 的精简版。
+  *
+- * Without this, <asm/kprobes.h> resolves to arch/arm64's, which reaches
+- * asm/cpucaps.h and the generated asm/cpucap-defs.h -- the whole cpufeature
+- * apparatus -- to obtain a macro that expands to nothing here.
++ * CONFIG_KPROBES=y 时反过来必须用父架构的完整定义：kprobe_opcode_t、
++ * MAX_INSN_SIZE、struct arch_specific_insn、struct kprobe_ctlblk，以及
++ * kprobe_brk_handler()/kprobe_ss_brk_handler()/kretprobe_brk_handler() 的原型
++ * 都在 arch/arm64/include/asm/kprobes.h 里。UML 换的只是陷入入口，其余照用。
+  */
+ #ifndef __UM_ARM64_KPROBES_H
+ #define __UM_ARM64_KPROBES_H
+ 
++#if defined(CONFIG_KPROBES) && defined(__aarch64__)
++#include "../../include/asm/kprobes.h"
++#else
+ #include <asm-generic/kprobes.h>
 +#endif
+ 
+ #endif /* __UM_ARM64_KPROBES_H */
+diff --git a/arch/arm64/um/asm/ptrace.h b/arch/arm64/um/asm/ptrace.h
+index 8a773c44c..03c108f34 100644
+--- a/arch/arm64/um/asm/ptrace.h
++++ b/arch/arm64/um/asm/ptrace.h
+@@ -101,4 +101,13 @@ static inline int ptrace_set_thread_area(struct task_struct *child, int idx,
+ 
+ extern void arch_switch_to(struct task_struct *to);
+ 
++
++/*
++ * generic kernel/kprobes.c（UP 分支）与 arch/arm64/kernel/probes/kprobes.c
++ * 都要把 PC 写回 pt_regs；UML 的 ptrace-generic.h 只提供了读宏。
++ */
++#ifndef instruction_pointer_set
++#define instruction_pointer_set(regs, val) (PT_REGS_IP(regs) = (val))
++#endif
++
+ #endif /* __UM_ARM64_PTRACE_H */
+diff --git a/arch/arm64/um/asm/traps.h b/arch/arm64/um/asm/traps.h
+new file mode 100644
+index 000000000..e59b67f4d
+--- /dev/null
++++ b/arch/arm64/um/asm/traps.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * ARCH=um SUBARCH=arm64 的 <asm/traps.h>。
++ *
++ * 父架构的这份头只被 kernel/probes/{kprobes,simulate-insn}.c 包含，而这两个文件
++ * 并不使用它里面的任何东西。真头却会经 <asm/esr.h> 把 <asm/memory.h> 拉进来，
++ * 那份头依赖 CONFIG_ARM64_VA_BITS、virt_to_phys、__ro_after_init 等只对真 arm64
++ * 成立的前提，在 UML 上必然编不过。所以这里给一个空壳。
++ */
++#ifndef __UM_ARM64_TRAPS_H
++#define __UM_ARM64_TRAPS_H
++
++#include <asm/ptrace.h>
++
++#endif /* __UM_ARM64_TRAPS_H */
 diff --git a/arch/arm64/um/kprobe-trap.c b/arch/arm64/um/kprobe-trap.c
 new file mode 100644
-index 000000000..6eb9655c2
+index 000000000..5d6ed610c
 --- /dev/null
 +++ b/arch/arm64/um/kprobe-trap.c
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,117 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * kprobes 的 UML 陷入路由（ARCH=um SUBARCH=arm64）。
@@ -152,6 +348,17 @@ index 000000000..6eb9655c2
 +	return 1;
 +}
 +NOKPROBE_SYMBOL(um_arm64_kprobe_trap);
++
++/*
++ * 父架构在 arch/arm64/mm/fault.c 里实现，UML 的缺页路径不经过 kprobes，
++ * 返回 0 表示「不由 kprobe 处理」，与父架构的语义一致。
++ */
++int kprobe_fault_handler(struct pt_regs *regs, unsigned int fsr)
++{
++	(void)regs;
++	(void)fsr;
++	return 0;
++}
 diff --git a/arch/arm64/um/os-Linux/Makefile b/arch/arm64/um/os-Linux/Makefile
 index 611e7b6c5..4798f9990 100644
 --- a/arch/arm64/um/os-Linux/Makefile
@@ -367,37 +574,31 @@ index 0030e4b97..808d1321c 100644
  	select THREAD_INFO_IN_TASK
  	select SPARSE_IRQ
  
-diff --git a/arch/um/include/asm/xor.h b/arch/um/include/asm/xor.h
-index 647fae200..3a8a1ab36 100644
---- a/arch/um/include/asm/xor.h
-+++ b/arch/um/include/asm/xor.h
-@@ -1,24 +1,6 @@
- /* SPDX-License-Identifier: GPL-2.0 */
- #ifndef _ASM_UM_XOR_H
- #define _ASM_UM_XOR_H
--
--#ifdef CONFIG_64BIT
--#undef CONFIG_X86_32
--#define TT_CPU_INF_XOR_DEFAULT (AVX_SELECT(&xor_block_sse_pf64))
--#else
--#define CONFIG_X86_32 1
--#define TT_CPU_INF_XOR_DEFAULT (AVX_SELECT(&xor_block_8regs))
--#endif
--
--#include <asm/cpufeature.h>
--#include <../../x86/include/asm/xor.h>
--#include <linux/time-internal.h>
--
--#ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
--#undef XOR_SELECT_TEMPLATE
--/* pick an arbitrary one - measuring isn't possible with inf-cpu */
--#define XOR_SELECT_TEMPLATE(x)	\
--	(time_travel_mode == TT_MODE_INFCPU ? TT_CPU_INF_XOR_DEFAULT : x)
--#endif
--
-+/* ARCH=um SUBARCH=arm64: x86 的内联汇编版本编不过（invalid input constraint 're'） */
-+#include <asm-generic/xor.h>
- #endif
+diff --git a/arch/um/include/asm/kprobes.h b/arch/um/include/asm/kprobes.h
+new file mode 100644
+index 000000000..049f0118e
+--- /dev/null
++++ b/arch/um/include/asm/kprobes.h
+@@ -0,0 +1,19 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * <asm/kprobes.h> 在 ARCH=um 下的解析入口。
++ *
++ * arch/um/include 在 include 搜索顺序里比 arch/arm64/um 更靠前，所以只改
++ * arch/arm64/um/asm/kprobes.h 不一定生效；两个位置写成同一份语义：
++ * arm64 子架构且开了 KPROBES 时转发到父架构的真头，其余情况保持 asm-generic
++ * 的精简版（只提供 __kprobes 段标注）。
++ */
++#ifndef __UM_ASM_KPROBES_H
++#define __UM_ASM_KPROBES_H
++
++#if defined(CONFIG_KPROBES) && defined(__aarch64__)
++#include "../../../arm64/include/asm/kprobes.h"
++#else
++#include <asm-generic/kprobes.h>
++#endif
++
++#endif /* __UM_ASM_KPROBES_H */
 diff --git a/arch/um/os-Linux/signal.c b/arch/um/os-Linux/signal.c
 index de372b936..4ae327acd 100644
 --- a/arch/um/os-Linux/signal.c
@@ -423,11 +624,3 @@ index de372b936..4ae327acd 100644
  	(*sig_info[sig])(sig, si, &r, mc);
  }
  
-diff --git a/tools/um-arm64/config/kprobes.config b/tools/um-arm64/config/kprobes.config
-new file mode 100644
-index 000000000..ff7c98717
---- /dev/null
-+++ b/tools/um-arm64/config/kprobes.config
-@@ -0,0 +1,2 @@
-+CONFIG_KPROBES=y
-+CONFIG_KRETPROBES=y
