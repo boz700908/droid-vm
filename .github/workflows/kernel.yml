@@ -1,64 +1,93 @@
 name: kernel
+
+# 不再自己维护内核构建：底座是 lakitu12/linux-um-arm64-gki
+# （Android 17 GKI 6.18 + arm64 UML 移植，含 SMP / umfb / virtio-gpu）。
+# 这里只做三件事：克隆它、叠加我们的配置片段、出手机端可用的产物。
+
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: "bionic 或 glibc"
-        default: bionic
-  push:
-    paths:
-      - 'kernel/**'
-      - 'rootfs/**'
-      - '.github/workflows/kernel.yml'
+      pages4k:
+        description: "4 KB guest 页（与 4 KB 宿主 1:1，redroid-13 用户态要的就是这个）"
+        type: boolean
+        default: true
+      extra_config:
+        description: "追加的 kconfig 片段，空格分隔，相对 tools/um-arm64/"
+        type: string
+        default: "config/magisk-lkm.config"
+
+env:
+  NDK_VER: r28c
+  UPSTREAM: https://github.com/lakitu12/linux-um-arm64-gki
 
 jobs:
-  um-arm64:
+  build:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
-      - name: 依赖
+      - name: 腾磁盘
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+
+      - name: 工具链
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential bc bison flex libssl-dev libelf-dev libncurses-dev \
-            ccache lld clang e2fsprogs curl xz-utils zstd unzip
+            clang llvm lld libelf-dev zlib1g-dev flex bison make file cpio \
+            e2fsprogs unzip curl
 
-      - uses: actions/cache@v4
+      - name: 缓存 NDK
+        id: ndk-cache
+        uses: actions/cache@v4
         with:
-          path: ~/.ccache
-          key: ccache-${{ github.sha }}
-          restore-keys: ccache-
+          path: /home/runner/android-ndk
+          key: ndk-${{ env.NDK_VER }}
 
-      - name: 取内核源码（作者分支，浅克隆）
+      - name: 下载 NDK
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch um-arm64 https://github.com/zalexdev/linux-um-arm64 ksrc
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 5 \
+            "https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip" -o /tmp/ndk.zip
+          unzip -q /tmp/ndk.zip -d /tmp/ndk-x
+          mkdir -p /home/runner/android-ndk
+          mv /tmp/ndk-x/android-ndk-${NDK_VER}/* /home/runner/android-ndk/
+          rm -rf /tmp/ndk.zip /tmp/ndk-x
+          test -x /home/runner/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/clang
+
+      - name: 克隆内核树
+        run: |
+          git clone --depth 1 "$UPSTREAM" ksrc
           git -C ksrc rev-parse HEAD | tee ksrc-sha.txt
 
-      - name: NDK
-        if: ${{ (inputs.mode || 'bionic') == 'bionic' }}
-        run: |
-          curl -sSLo ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
-          unzip -q ndk.zip
-          echo "NDK=$PWD/android-ndk-r27c" >> "$GITHUB_ENV"
+      - name: 叠加我们的片段
+        run: cp kernel/config/magisk-lkm.config ksrc/tools/um-arm64/config/
 
-      - name: 构建内核
+      - name: 构建 bionic 内核
+        working-directory: ksrc/tools/um-arm64
         env:
-          CCACHE_DIR: ~/.ccache
+          NDK: /home/runner/android-ndk
+          TREE: ${{ github.workspace }}/ksrc
+          ART: ${{ github.workspace }}/artifacts
+          O: ${{ runner.temp }}/um-gki618-build
         run: |
-          MODE=${{ inputs.mode || 'bionic' }} KSRC=$PWD/ksrc OUT=$PWD/out \
-            bash kernel/build.sh
+          set -euo pipefail
+          EXTRA="config/docker.config config/docker-completions.config config/snap-flatpak.config config/android-guest.config config/umfb.config"
+          if [ "${{ inputs.pages4k }}" = "true" ]; then EXTRA="$EXTRA config/page4k.config"; fi
+          if [ -n "${{ inputs.extra_config }}" ]; then EXTRA="$EXTRA ${{ inputs.extra_config }}"; fi
+          echo "EXTRA_CONFIG=$EXTRA"
+          EXTRA_CONFIG="$EXTRA" bash harness/build-bionic.sh
 
       - name: Alpine 根盘
-        run: KOUT=$PWD/out bash rootfs/mkrootfs-alpine.sh
+        run: KOUT=$PWD/artifacts bash rootfs/mkrootfs-alpine.sh
 
       - uses: actions/upload-artifact@v4
         with:
-          name: um-arm64-${{ inputs.mode || 'bionic' }}
+          name: um-gki618-${{ inputs.pages4k == true && '4k' || '16k' }}
           path: |
-            out/linux-*
-            out/alpine.ext4
-            out/run.sh
-            out/build.txt
+            artifacts/linux-bionic*
+            artifacts/stub_exe*
+            artifacts/alpine.ext4
+            artifacts/run.sh
             ksrc-sha.txt
