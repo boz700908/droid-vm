@@ -122,7 +122,6 @@ jobs:
           # UML 的 asm/xor.h 是指向 x86 的符号链接，arm64 SUBARCH 下 x86 内联汇编编不过
           rm -f ksrc/arch/um/include/asm/xor.h
           printf '#include <asm-generic/xor.h>\n' > ksrc/arch/um/include/asm/xor.h
-          rm -f ksrc/arch/um/include/asm/xor.h
           EXTRA_CONFIG="$EXTRA" bash harness/build-bionic.sh
 
       - name: 核对关键 CONFIG
