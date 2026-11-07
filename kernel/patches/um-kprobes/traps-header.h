@@ -12,4 +12,10 @@
 
 #include <asm/ptrace.h>
 
+/*
+ * 父架构把它实现为 kernel/traps.c 里的真函数（要处理 compat 与 PC 前进量）。
+ * UML 侧只有 aarch64 语义：把 PC 推进一条被模拟掉的指令即可。
+ */
+#define arm64_skip_faulting_instruction(regs, size)	(PT_REGS_IP(regs) += (size))
+
 #endif /* __UM_ARM64_TRAPS_H */

@@ -93,6 +93,30 @@ if 'instruction_pointer_set' not in s:
 #define instruction_pointer_set(regs, val) (PT_REGS_IP(regs) = (val))
 #endif
 
+#ifndef __ASSEMBLY__
+/*
+ * 父架构的 kernel/probes/simulate-insn.c 按「架构寄存器号」读写 pt_regs，其中
+ * 31 表示 XZR 而不是 SP；UML 侧 x0..x30 与 HOST_Xn 一一对应且连续。
+ */
+static inline unsigned long pt_regs_read_reg(struct pt_regs *regs, int r)
+{
+	return (r == 31) ? 0 : PT_REGS_X(regs, r);
+}
+
+static inline void pt_regs_write_reg(struct pt_regs *regs, int r,
+				     unsigned long val)
+{
+	if (r != 31)
+		PT_REGS_X(regs, r) = val;
+}
+
+static inline void procedure_link_pointer_set(struct pt_regs *regs,
+					      unsigned long val)
+{
+	PT_REGS_X30(regs) = val;
+}
+#endif /* !__ASSEMBLY__ */
+
 """
     i = s.rstrip().rfind('#endif')
     assert i > 0, 'ptrace.h 里找不到结尾 #endif'
@@ -126,16 +150,19 @@ if 'BRK64_OPCODE_KPROBES' not in s:
 print('debug-monitors.h: BRK64_OPCODE_* / DBG_HOOK_* 已补')
 PY
 
-# 7) 父架构 probes/kprobes.c 直接把 pstate 当 struct pt_regs 的成员读写；UML 的
-#    pt_regs 把宿主寄存器收在 regs 里，必须走 PT_REGS_PSTATE()。
+# 7) 父架构 probes 代码直接把 pstate 当 struct pt_regs 的成员读写；UML 的 pt_regs
+#    把它收在 regs 里，只能走 PT_REGS_PSTATE()。
 python3 - "$K" <<'PY'
 import sys, pathlib
 K = pathlib.Path(sys.argv[1])
-p = K / 'arch/arm64/kernel/probes/kprobes.c'
-s = p.read_text()
-if 'regs->pstate' in s:
+for rel in ('arch/arm64/kernel/probes/kprobes.c',
+            'arch/arm64/kernel/probes/simulate-insn.c'):
+    p = K / rel
+    s = p.read_text()
+    if 'regs->pstate' not in s:
+        continue
     p.write_text(s.replace('regs->pstate', 'PT_REGS_PSTATE(regs)'))
-    print('probes/kprobes.c: regs->pstate 改走 PT_REGS_PSTATE()')
+    print('%s: regs->pstate 改走 PT_REGS_PSTATE()' % rel)
 PY
 
 # 8) 父架构 probes/kprobes.c 剩下的真 arm64 专有写法：regs->pc、regs->regs[n] 在
