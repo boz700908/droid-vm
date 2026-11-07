@@ -96,3 +96,26 @@ if 'instruction_pointer_set' not in s:
     assert i > 0, 'ptrace.h 里找不到结尾 #endif'
     pt.write_text(s[:i] + snippet + s[i:])
 PY
+
+# 6) arch/arm64/um/asm/debug-monitors.h 是空头，但父架构 probes/kprobes.c 用
+#    DBG_HOOK_HANDLED / DBG_HOOK_ERROR 告诉陷入层 BRK 是否已被吃掉，补这两个常量。
+python3 - "$K" <<'PY'
+import sys, pathlib
+K = pathlib.Path(sys.argv[1])
+p = K / 'arch/arm64/um/asm/debug-monitors.h'
+s = p.read_text()
+if 'DBG_HOOK_HANDLED' not in s:
+    add = """
+/*
+ * 父架构 arch/arm64/kernel/probes/kprobes.c 用这两个返回值表示 BRK 是否
+ * 已被消费。UML 没有 debug monitor 硬件，但常量语义不变。
+ */
+#define DBG_HOOK_HANDLED	0
+#define DBG_HOOK_ERROR		1
+
+"""
+    i = s.rstrip().rfind('#endif')
+    assert i > 0, 'debug-monitors.h 里找不到结尾 #endif'
+    p.write_text(s[:i] + add + s[i:])
+print('debug-monitors.h: DBG_HOOK_* 已补')
+PY
