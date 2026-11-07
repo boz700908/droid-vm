@@ -3,6 +3,9 @@ name: kernel
 # 不再自己维护内核构建：底座是 lakitu12/linux-um-arm64-gki
 # （Android 17 GKI 6.18 + arm64 UML 移植，含 SMP / umfb / virtio-gpu）。
 # 这里只做三件事：克隆它、叠加我们的配置片段、出手机端可用的产物。
+#
+# root 方案：SukiSU Ultra（KSU 超集，含 KPM/SUSFS）。内核只开 LKM 所需的
+# CONFIG_MODULES/KALLSYMS/KPROBES，kernelsu.ko 另行外编（CONFIG_KSU=m CONFIG_KPM=y）。
 
 on:
   workflow_dispatch:
@@ -14,11 +17,12 @@ on:
       extra_config:
         description: "追加的 kconfig 片段，空格分隔，相对 tools/um-arm64/"
         type: string
-        default: "config/magisk-lkm.config"
+        default: "config/sukisu-lkm.config"
 
 env:
   NDK_VER: r28c
   UPSTREAM: https://github.com/lakitu12/linux-um-arm64-gki
+  SUKISU: https://github.com/SukiSU-Ultra/SukiSU-Ultra
 
 jobs:
   build:
@@ -62,9 +66,9 @@ jobs:
           git -C ksrc rev-parse HEAD | tee ksrc-sha.txt
 
       - name: 叠加我们的片段
-        run: cp kernel/config/magisk-lkm.config ksrc/tools/um-arm64/config/
+        run: cp kernel/config/sukisu-lkm.config ksrc/tools/um-arm64/config/
 
-      - name: 生成 arm64 生成头
+      - name: 生成 arm64 生成头 + 修 GKI 的 KVM 头依赖
         run: |
           # ARCH=um 不会跑 arch/arm64 的 prepare，asm/sysreg-defs.h 永远不会生成；
           # 而 CONFIG_MODULES 会编 arch/arm64/kernel/module-plts.c，GKI 里它经
@@ -80,6 +84,17 @@ jobs:
           done
           wc -l /tmp/sysreg-defs.h /tmp/cpucap-defs.h
 
+          # 光有 sysreg-defs.h 还不够：arch_gicv3.h 要的是 arm64 的 asm/barrier.h
+          # 的 isb/dsb/nops 与 asm/capability.h 的 cpus_have_cap，ARCH=um 下这些
+          # asm 头走 UM 的通用版本，压根没有这些符号。
+          # module-plts.c 是唯一理由：它无条件 include <asm/kvm_pkvm_module.h>，
+          # 而全文件只用到 pkvm_el2_mod_frob_sections()，那个调用被
+          # #if IS_ENABLED(CONFIG_KVM) 包着。UML 没有 KVM，删掉这行 include 即可，
+          # 整条 kvm_host.h 依赖随即断开。
+          sed -i '/kvm_pkvm_module\.h/d' ksrc/arch/arm64/kernel/module-plts.c
+          echo "--- module-plts.c 里残留的 kvm 引用（应为 0）---"
+          grep -c 'pkvm' ksrc/arch/arm64/kernel/module-plts.c || true
+
       - name: 构建 bionic 内核
         working-directory: ksrc/tools/um-arm64
         env:
@@ -94,6 +109,19 @@ jobs:
           if [ -n "${{ inputs.extra_config }}" ]; then EXTRA="$EXTRA ${{ inputs.extra_config }}"; fi
           echo "EXTRA_CONFIG=$EXTRA"
           EXTRA_CONFIG="$EXTRA" bash harness/build-bionic.sh
+
+      - name: 核对关键 CONFIG
+        run: |
+          C="${{ runner.temp }}/um-gki618-build/.config"
+          test -f "$C" || { echo "找不到 $C"; find "${{ runner.temp }}" -name .config -maxdepth 3; exit 1; }
+          echo "===== 关键项实际取值 ====="
+          for k in SMP NR_CPUS MODULES MODULE_UNLOAD KALLSYMS KALLSYMS_ALL KPROBES \
+                   EXT4_FS OVERLAY_FS FANOTIFY SECURITY SECURITYFS AUDIT SECURITY_SELINUX \
+                   ANDROID_BINDERFS ANDROID_BINDER_IPC MODVERSIONS MODULE_SIG_FORCE DEBUG_INFO_BTF; do
+            printf '%-24s ' "$k"
+            grep -E "^CONFIG_${k}=" "$C" || echo "(未设置)"
+          done
+          cp "$C" artifacts/kernel-config.txt
 
       - name: Alpine 根盘
         run: KOUT=$PWD/artifacts bash rootfs/mkrootfs-alpine.sh
@@ -112,6 +140,8 @@ jobs:
           path: |
             artifacts/linux-bionic*
             artifacts/stub_exe*
+            artifacts/kernelsu.ko
             artifacts/alpine.ext4
             artifacts/run.sh
+            artifacts/kernel-config.txt
             ksrc-sha.txt
