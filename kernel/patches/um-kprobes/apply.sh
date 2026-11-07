@@ -12,6 +12,7 @@ cp "$P/mem-host.c"      "$K/arch/arm64/um/os-Linux/mem-host.c"
 # <asm/kprobes.h> 的桩默认只给 __kprobes 标注，开了 KPROBES 必须换回父架构真头
 cp "$P/kprobes-header.h" "$K/arch/arm64/um/asm/kprobes.h"
 cp "$P/kprobes-header-um.h" "$K/arch/um/include/asm/kprobes.h"
+cp "$P/daifflags-header.h" "$K/arch/arm64/um/asm/daifflags.h"
 echo "um-kprobes: <asm/kprobes.h> 两处已铺"
 md5sum "$K/arch/arm64/um/asm/kprobes.h" "$K/arch/um/include/asm/kprobes.h"
 
@@ -75,4 +76,28 @@ if 'arch_um_kprobe_trap' not in s:
     sc.write_text(s)
 
 print('um-kprobes: 补丁已应用')
+
+# 5) arch/arm64/um/asm/ptrace.h: kprobes 需要 instruction_pointer[_set]
+pt = K / 'arch/arm64/um/asm/ptrace.h'
+s = pt.read_text()
+if 'instruction_pointer_set' not in s:
+    snippet = """
+/*
+ * UML 的 ptrace 头原本没有这两条；generic kernel/kprobes.c（UP 分支）与
+ * arch/arm64/kernel/probes/kprobes.c（XOL 单步改写 PC）都要用。
+ */
+static inline unsigned long instruction_pointer(struct pt_regs *regs)
+{
+	return PT_REGS_IP(regs);
+}
+
+static inline void instruction_pointer_set(struct pt_regs *regs, unsigned long val)
+{
+	PT_REGS_IP(regs) = val;
+}
+
+"""
+    i = s.rstrip().rfind('#endif')
+    assert i > 0, 'ptrace.h 里找不到结尾 #endif'
+    pt.write_text(s[:i] + snippet + s[i:])
 PY
