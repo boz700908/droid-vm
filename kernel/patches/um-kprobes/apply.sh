@@ -13,6 +13,8 @@ cp "$P/mem-host.c"      "$K/arch/arm64/um/os-Linux/mem-host.c"
 cp "$P/kprobes-header.h" "$K/arch/arm64/um/asm/kprobes.h"
 cp "$P/kprobes-header-um.h" "$K/arch/um/include/asm/kprobes.h"
 cp "$P/daifflags-header.h" "$K/arch/arm64/um/asm/daifflags.h"
+cp "$P/traps-header.h"     "$K/arch/arm64/um/asm/traps.h"
+cp "$P/gcs-header.h"       "$K/arch/arm64/um/asm/gcs.h"
 echo "um-kprobes: <asm/kprobes.h> 两处已铺"
 md5sum "$K/arch/arm64/um/asm/kprobes.h" "$K/arch/um/include/asm/kprobes.h"
 
@@ -97,25 +99,41 @@ if 'instruction_pointer_set' not in s:
     pt.write_text(s[:i] + snippet + s[i:])
 PY
 
-# 6) arch/arm64/um/asm/debug-monitors.h 是空头，但父架构 probes/kprobes.c 用
-#    DBG_HOOK_HANDLED / DBG_HOOK_ERROR 告诉陷入层 BRK 是否已被吃掉，补这两个常量。
+# 6) arch/arm64/um/asm/debug-monitors.h：父架构 probes/kprobes.c 要用 BRK 立即数
+#    编码（装点 / 软单步）与 DBG_HOOK_*（BRK 是否已被消费）。
 python3 - "$K" <<'PY'
 import sys, pathlib
 K = pathlib.Path(sys.argv[1])
 p = K / 'arch/arm64/um/asm/debug-monitors.h'
 s = p.read_text()
-if 'DBG_HOOK_HANDLED' not in s:
+if 'BRK64_OPCODE_KPROBES' not in s:
     add = """
-/*
- * 父架构 arch/arm64/kernel/probes/kprobes.c 用这两个返回值表示 BRK 是否
- * 已被消费。UML 没有 debug monitor 硬件，但常量语义不变。
- */
-#define DBG_HOOK_HANDLED	0
-#define DBG_HOOK_ERROR		1
+#include <asm/brk-imm.h>
+#include <asm/insn-def.h>
+
+/* 装 kprobe 时把目标指令改写成 BRK；ESR 的 comment 字段区分是哪一种。 */
+#define BRK64_OPCODE_KPROBES\t(AARCH64_BREAK_MON | (KPROBES_BRK_IMM << 5))
+#define BRK64_OPCODE_KPROBES_SS\t(AARCH64_BREAK_MON | (KPROBES_BRK_SS_IMM << 5))
+
+/* 父架构 probes/kprobes.c 用这两个返回值表示 BRK 是否已被吃掉。 */
+#define DBG_HOOK_HANDLED\t0
+#define DBG_HOOK_ERROR\t\t1
 
 """
     i = s.rstrip().rfind('#endif')
     assert i > 0, 'debug-monitors.h 里找不到结尾 #endif'
     p.write_text(s[:i] + add + s[i:])
-print('debug-monitors.h: DBG_HOOK_* 已补')
+print('debug-monitors.h: BRK64_OPCODE_* / DBG_HOOK_* 已补')
+PY
+
+# 7) 父架构 probes/kprobes.c 直接把 pstate 当 struct pt_regs 的成员读写；UML 的
+#    pt_regs 把宿主寄存器收在 regs 里，必须走 PT_REGS_PSTATE()。
+python3 - "$K" <<'PY'
+import sys, pathlib
+K = pathlib.Path(sys.argv[1])
+p = K / 'arch/arm64/kernel/probes/kprobes.c'
+s = p.read_text()
+if 'regs->pstate' in s:
+    p.write_text(s.replace('regs->pstate', 'PT_REGS_PSTATE(regs)'))
+    print('probes/kprobes.c: regs->pstate 改走 PT_REGS_PSTATE()')
 PY
