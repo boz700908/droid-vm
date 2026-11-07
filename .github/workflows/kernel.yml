@@ -122,11 +122,12 @@ jobs:
           # UML 的 arch/um/include/asm 是构建期才生成的符号链接（指向 x86），
           # 所以不能在那里放补丁文件：直接改头文件本体，让两边的 xor.h 都走通用实现，
           # 否则 arm64 SUBARCH 下会编到 x86 的内联汇编（invalid input constraint 're'）。
-          for f in ksrc/arch/x86/include/asm/xor.h ksrc/arch/arm64/include/asm/xor.h; do
+          # 注意本 step 的 cwd 是 ksrc/tools/um-arm64，源码树一律用 $TREE 绝对路径。
+          for f in "$TREE/arch/x86/include/asm/xor.h" "$TREE/arch/arm64/include/asm/xor.h"; do
             printf '#include <asm-generic/xor.h>\n' > "$f"
           done
           # kprobes：父架构 probes 实现 + UML 陷入入口/文本改写（kernel/patches/um-kprobes/）
-          bash kernel/patches/um-kprobes/apply.sh ksrc
+          bash "$GITHUB_WORKSPACE/kernel/patches/um-kprobes/apply.sh" "$TREE"
           EXTRA_CONFIG="$EXTRA" bash harness/build-bionic.sh
 
       - name: 核对关键 CONFIG
