@@ -1,5 +1,5 @@
 diff --git a/arch/arm64/kernel/probes/kprobes.c b/arch/arm64/kernel/probes/kprobes.c
-index 43a0361a8..c7dac0e3c 100644
+index 43a0361a8..a5cb006bf 100644
 --- a/arch/arm64/kernel/probes/kprobes.c
 +++ b/arch/arm64/kernel/probes/kprobes.c
 @@ -195,15 +195,15 @@ static void __kprobes set_current_kprobe(struct kprobe *p)
@@ -22,11 +22,67 @@ index 43a0361a8..c7dac0e3c 100644
  }
  
  static void __kprobes setup_singlestep(struct kprobe *p,
+@@ -373,10 +373,10 @@ kprobe_ss_brk_handler(struct pt_regs *regs, unsigned long esr)
+ int __kprobes
+ kretprobe_brk_handler(struct pt_regs *regs, unsigned long esr)
+ {
+-	if (regs->pc != (unsigned long)__kretprobe_trampoline)
++	if (PT_REGS_IP(regs) != (unsigned long)__kretprobe_trampoline)
+ 		return DBG_HOOK_ERROR;
+ 
+-	regs->pc = kretprobe_trampoline_handler(regs, (void *)regs->regs[29]);
++	PT_REGS_IP(regs) = kretprobe_trampoline_handler(regs, (void *)PT_REGS_X29(regs));
+ 	return DBG_HOOK_HANDLED;
+ }
+ 
+@@ -396,23 +396,26 @@ int __init arch_populate_kprobe_blacklist(void)
+ 					(unsigned long)__irqentry_text_end);
+ 	if (ret)
+ 		return ret;
++#ifndef CONFIG_UML
++/* UML 没有 EL2，不存在 hyp / hyp_idmap 文本段。 */
+ 	ret = kprobe_add_area_blacklist((unsigned long)__hyp_text_start,
+ 					(unsigned long)__hyp_text_end);
+ 	if (ret || is_kernel_in_hyp_mode())
+ 		return ret;
+ 	ret = kprobe_add_area_blacklist((unsigned long)__hyp_idmap_text_start,
+ 					(unsigned long)__hyp_idmap_text_end);
++#endif
+ 	return ret;
+ }
+ 
+ void __kprobes arch_prepare_kretprobe(struct kretprobe_instance *ri,
+ 				      struct pt_regs *regs)
+ {
+-	ri->ret_addr = (kprobe_opcode_t *)regs->regs[30];
+-	ri->fp = (void *)regs->regs[29];
++	ri->ret_addr = (kprobe_opcode_t *)PT_REGS_X30(regs);
++	ri->fp = (void *)PT_REGS_X29(regs);
+ 
+ 	/* replace return addr (x30) with trampoline */
+-	regs->regs[30] = (long)&__kretprobe_trampoline;
++	PT_REGS_X30(regs) = (long)&__kretprobe_trampoline;
+ }
+ 
+ int __kprobes arch_trampoline_kprobe(struct kprobe *p)
+diff --git a/arch/arm64/kernel/probes/simulate-insn.c b/arch/arm64/kernel/probes/simulate-insn.c
+index 89fbeb321..d7e029c17 100644
+--- a/arch/arm64/kernel/probes/simulate-insn.c
++++ b/arch/arm64/kernel/probes/simulate-insn.c
+@@ -135,7 +135,7 @@ simulate_b_cond(u32 opcode, long addr, struct pt_regs *regs)
+ {
+ 	int disp = 4;
+ 
+-	if (aarch32_opcode_cond_checks[opcode & 0xf](regs->pstate & 0xffffffff))
++	if (aarch32_opcode_cond_checks[opcode & 0xf](PT_REGS_PSTATE(regs) & 0xffffffff))
+ 		disp = bcond_displacement(opcode);
+ 
+ 	instruction_pointer_set(regs, addr + disp);
 diff --git a/arch/arm64/um/Makefile b/arch/arm64/um/Makefile
-index 751ffdb72..cd83894dc 100644
+index 751ffdb72..40ae7921d 100644
 --- a/arch/arm64/um/Makefile
 +++ b/arch/arm64/um/Makefile
-@@ -42,3 +42,13 @@ UNPROFILE_OBJS := stub_segv.o
+@@ -42,3 +42,15 @@ UNPROFILE_OBJS := stub_segv.o
  CFLAGS_stub_segv.o := $(CFLAGS_NO_HARDENING)
  
  include $(srctree)/arch/um/scripts/Makefile.rules
@@ -38,8 +94,10 @@ index 751ffdb72..cd83894dc 100644
 +obj-$(CONFIG_KPROBES) += ../kernel/probes/kprobes.o \
 +			 ../kernel/probes/decode-insn.o \
 +			 ../kernel/probes/simulate-insn.o
-+obj-$(CONFIG_KRETPROBES) += ../kernel/probes/kprobes_trampoline.o
-+obj-$(CONFIG_KPROBES) += kprobe-trap.o probe-mem.o
++# CONFIG_KRETPROBES 的 trampoline 用自家的：父架构那份 .S 会 include
++# <asm/assembler.h>，其包含链在 UML 下不是汇编安全的。
++obj-$(CONFIG_KRETPROBES) += kretprobe-trampoline.o
++obj-$(CONFIG_KPROBES) += kprobe-trap.o kprobe-cond.o probe-mem.o
 diff --git a/arch/arm64/um/asm/daifflags.h b/arch/arm64/um/asm/daifflags.h
 new file mode 100644
 index 000000000..23f9a7cfb
@@ -198,10 +256,10 @@ index 511755ff8..fccbe1b7a 100644
  
  #endif /* __UM_ARM64_KPROBES_H */
 diff --git a/arch/arm64/um/asm/ptrace.h b/arch/arm64/um/asm/ptrace.h
-index 8a773c44c..03c108f34 100644
+index 8a773c44c..586217381 100644
 --- a/arch/arm64/um/asm/ptrace.h
 +++ b/arch/arm64/um/asm/ptrace.h
-@@ -101,4 +101,13 @@ static inline int ptrace_set_thread_area(struct task_struct *child, int idx,
+@@ -101,4 +101,37 @@ static inline int ptrace_set_thread_area(struct task_struct *child, int idx,
  
  extern void arch_switch_to(struct task_struct *to);
  
@@ -214,13 +272,37 @@ index 8a773c44c..03c108f34 100644
 +#define instruction_pointer_set(regs, val) (PT_REGS_IP(regs) = (val))
 +#endif
 +
++#ifndef __ASSEMBLY__
++/*
++ * 父架构的 kernel/probes/simulate-insn.c 按「架构寄存器号」读写 pt_regs，其中
++ * 31 表示 XZR 而不是 SP；UML 侧 x0..x30 与 HOST_Xn 一一对应且连续。
++ */
++static inline unsigned long pt_regs_read_reg(struct pt_regs *regs, int r)
++{
++	return (r == 31) ? 0 : PT_REGS_X(regs, r);
++}
++
++static inline void pt_regs_write_reg(struct pt_regs *regs, int r,
++				     unsigned long val)
++{
++	if (r != 31)
++		PT_REGS_X(regs, r) = val;
++}
++
++static inline void procedure_link_pointer_set(struct pt_regs *regs,
++					      unsigned long val)
++{
++	PT_REGS_X30(regs) = val;
++}
++#endif /* !__ASSEMBLY__ */
++
  #endif /* __UM_ARM64_PTRACE_H */
 diff --git a/arch/arm64/um/asm/traps.h b/arch/arm64/um/asm/traps.h
 new file mode 100644
-index 000000000..e59b67f4d
+index 000000000..bbf1a8819
 --- /dev/null
 +++ b/arch/arm64/um/asm/traps.h
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,21 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * ARCH=um SUBARCH=arm64 的 <asm/traps.h>。
@@ -235,13 +317,132 @@ index 000000000..e59b67f4d
 +
 +#include <asm/ptrace.h>
 +
++/*
++ * 父架构把它实现为 kernel/traps.c 里的真函数（要处理 compat 与 PC 前进量）。
++ * UML 侧只有 aarch64 语义：把 PC 推进一条被模拟掉的指令即可。
++ */
++#define arm64_skip_faulting_instruction(regs, size)	(PT_REGS_IP(regs) += (size))
++
 +#endif /* __UM_ARM64_TRAPS_H */
+diff --git a/arch/arm64/um/kprobe-cond.c b/arch/arm64/um/kprobe-cond.c
+new file mode 100644
+index 000000000..4dbf7cf5b
+--- /dev/null
++++ b/arch/arm64/um/kprobe-cond.c
+@@ -0,0 +1,107 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * A32 条件执行谓词表（ARCH=um SUBARCH=arm64）。
++ *
++ * simulate-insn.c 解码到 A32 指令时要先按 NZCV 判断这条指令是否执行，父架构把
++ * 这张表放在 arch/arm64/kernel/traps.c，而 UML 不编那个文件，于是 vmlinux 链接
++ * 时会缺 aarch32_opcode_cond_checks。这里按 ARM ARM 的条件码定义给出等价实现，
++ * 语义逐条照抄父架构（含 cc 0b1111 与 0b1110 等价于 AL 的处理）。
++ */
++#include <linux/kprobes.h>
++#include <linux/types.h>
++#include <asm/insn.h>
++#include <asm/ptrace.h>
++
++static bool __kprobes um_cond_eq(unsigned long pstate)
++{
++	return (pstate & PSR_Z_BIT) != 0;
++}
++
++static bool __kprobes um_cond_ne(unsigned long pstate)
++{
++	return (pstate & PSR_Z_BIT) == 0;
++}
++
++static bool __kprobes um_cond_cs(unsigned long pstate)
++{
++	return (pstate & PSR_C_BIT) != 0;
++}
++
++static bool __kprobes um_cond_cc(unsigned long pstate)
++{
++	return (pstate & PSR_C_BIT) == 0;
++}
++
++static bool __kprobes um_cond_mi(unsigned long pstate)
++{
++	return (pstate & PSR_N_BIT) != 0;
++}
++
++static bool __kprobes um_cond_pl(unsigned long pstate)
++{
++	return (pstate & PSR_N_BIT) == 0;
++}
++
++static bool __kprobes um_cond_vs(unsigned long pstate)
++{
++	return (pstate & PSR_V_BIT) != 0;
++}
++
++static bool __kprobes um_cond_vc(unsigned long pstate)
++{
++	return (pstate & PSR_V_BIT) == 0;
++}
++
++static bool __kprobes um_cond_hi(unsigned long pstate)
++{
++	pstate &= ~(pstate >> 1);	/* PSR_C_BIT &= ~PSR_Z_BIT */
++	return (pstate & PSR_C_BIT) != 0;
++}
++
++static bool __kprobes um_cond_ls(unsigned long pstate)
++{
++	pstate &= ~(pstate >> 1);	/* PSR_C_BIT &= ~PSR_Z_BIT */
++	return (pstate & PSR_C_BIT) == 0;
++}
++
++static bool __kprobes um_cond_ge(unsigned long pstate)
++{
++	pstate ^= (pstate << 3);	/* PSR_N_BIT ^= PSR_V_BIT */
++	return (pstate & PSR_N_BIT) == 0;
++}
++
++static bool __kprobes um_cond_lt(unsigned long pstate)
++{
++	pstate ^= (pstate << 3);	/* PSR_N_BIT ^= PSR_V_BIT */
++	return (pstate & PSR_N_BIT) != 0;
++}
++
++static bool __kprobes um_cond_gt(unsigned long pstate)
++{
++	/* PSR_N_BIT ^= PSR_V_BIT */
++	unsigned long temp = pstate ^ (pstate << 3);
++
++	temp |= (pstate << 1);		/* PSR_N_BIT |= PSR_Z_BIT */
++	return (temp & PSR_N_BIT) == 0;
++}
++
++static bool __kprobes um_cond_le(unsigned long pstate)
++{
++	/* PSR_N_BIT ^= PSR_V_BIT */
++	unsigned long temp = pstate ^ (pstate << 3);
++
++	temp |= (pstate << 1);		/* PSR_N_BIT |= PSR_Z_BIT */
++	return (temp & PSR_N_BIT) != 0;
++}
++
++static bool __kprobes um_cond_al(unsigned long pstate)
++{
++	return true;
++}
++
++pstate_check_t * const aarch32_opcode_cond_checks[16] = {
++	um_cond_eq, um_cond_ne, um_cond_cs, um_cond_cc,
++	um_cond_mi, um_cond_pl, um_cond_vs, um_cond_vc,
++	um_cond_hi, um_cond_ls, um_cond_ge, um_cond_lt,
++	um_cond_gt, um_cond_le, um_cond_al, um_cond_al
++};
 diff --git a/arch/arm64/um/kprobe-trap.c b/arch/arm64/um/kprobe-trap.c
 new file mode 100644
-index 000000000..5d6ed610c
+index 000000000..355a25be0
 --- /dev/null
 +++ b/arch/arm64/um/kprobe-trap.c
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,125 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * kprobes 的 UML 陷入路由（ARCH=um SUBARCH=arm64）。
@@ -260,9 +461,23 @@ index 000000000..5d6ed610c
 +#include <linux/string.h>
 +#include <asm/brk-imm.h>
 +#include <asm/debug-monitors.h>
-+#include <asm/esr.h>
 +#include <asm/kprobes.h>
 +#include <asm/ptrace.h>
++
++/*
++ * 父架构 <asm/esr.h> 会经 <asm/memory.h> 拉入真 arm64 的地址空间常量
++ * （CONFIG_ARM64_VA_BITS、virt_to_phys 等），UML 侧编不过。这里只用到两个
++ * ESR 编码常量，按 ARM ARM 的定义直接写。
++ */
++#define ESR_ELx_EC_SHIFT	26
++#define ESR_ELx_EC_BRK64	0x3c
++
++/*
++ * arm64 的 PSTATE 模式位。UML 的 <asm/ptrace.h> 不提供 PSR_MODE_*，
++ * 而这里只需要「内核态 EL1h」这一个值，按 ARM ARM 定义直接写。
++ */
++#define UM_PSR_MODE_MASK	0xful
++#define UM_PSR_MODE_EL1h	0x5ul
 +
 +/* raw[] 的布局，必须与 arch/arm64/um/os-Linux/kprobe-signal.c 一致 */
 +enum {
@@ -304,18 +519,23 @@ index 000000000..5d6ed610c
 +	if (!ours)
 +		return 0;
 +
++	/*
++	 * UML 的 struct pt_regs 只有 regs.gp[] 一个寄存器阵列，没有 regs/sp/
++	 * pc/pstate/syscallno 这些成员，全部走 PT_REGS_* 宏。
++	 */
 +	memset(&regs, 0, sizeof(regs));
 +	for (i = 0; i < 31; i++)
-+		regs.regs[i] = raw[UM_RAW_X0 + i];
-+	regs.sp = raw[UM_RAW_SP];
-+	regs.pc = pc;
-+	regs.syscallno = NO_SYSCALL;
++		PT_REGS_X(&regs, i) = raw[UM_RAW_X0 + i];
++	PT_REGS_SP_REG(&regs) = raw[UM_RAW_SP];
++	PT_REGS_IP(&regs) = pc;
 +	/*
-+	 * 这是内核态 BRK：把模式位换成 EL1 再交出去，否则 kprobes 内部的
-+	 * user_mode(regs) 会把一次内核陷入当成用户态陷入。宿主线程真正的
-+	 * EL/DAIF 由信号帧自己保存，所以这个改动不回写。
++	 * 这是内核态 BRK。UML 的 user_mode(regs) 读的是 uml_pt_regs.is_user
++	 * （memset 已置 0），真 arm64 读的是 pstate 模式位，所以这里把模式位
++	 * 也换成 EL1h，两边对「内核态」的判定才一致。宿主线程真正的 EL/DAIF
++	 * 由信号帧自己保存，这个改动不回写。
 +	 */
-+	regs.pstate = (raw[UM_RAW_PSTATE] & ~PSR_MODE_MASK) | PSR_MODE_EL1h;
++	PT_REGS_PSTATE(&regs) = (raw[UM_RAW_PSTATE] & ~UM_PSR_MODE_MASK) |
++				UM_PSR_MODE_EL1h;
 +
 +	esr = ((unsigned long)ESR_ELx_EC_BRK64 << ESR_ELx_EC_SHIFT) | imm;
 +
@@ -342,23 +562,40 @@ index 000000000..5d6ed610c
 +		return 0;
 +
 +	for (i = 0; i < 31; i++)
-+		raw[UM_RAW_X0 + i] = regs.regs[i];
-+	raw[UM_RAW_SP] = regs.sp;
-+	raw[UM_RAW_PC] = regs.pc;
++		raw[UM_RAW_X0 + i] = PT_REGS_X(&regs, i);
++	raw[UM_RAW_SP] = PT_REGS_SP_REG(&regs);
++	raw[UM_RAW_PC] = PT_REGS_IP(&regs);
 +	return 1;
 +}
 +NOKPROBE_SYMBOL(um_arm64_kprobe_trap);
-+
+diff --git a/arch/arm64/um/kretprobe-trampoline.S b/arch/arm64/um/kretprobe-trampoline.S
+new file mode 100644
+index 000000000..80851a767
+--- /dev/null
++++ b/arch/arm64/um/kretprobe-trampoline.S
+@@ -0,0 +1,22 @@
++/* SPDX-License-Identifier: GPL-2.0 */
 +/*
-+ * 父架构在 arch/arm64/mm/fault.c 里实现，UML 的缺页路径不经过 kprobes，
-+ * 返回 0 表示「不由 kprobe 处理」，与父架构的语义一致。
++ * kretprobe trampoline for ARCH=um SUBARCH=arm64.
++ *
++ * 父架构的 kernel/probes/kprobes_trampoline.S 会 include <asm/assembler.h>，
++ * 那一串头在 UML 上是 C 专用的（alternative.h / cpufeature.h / ptrace.h 都有
++ * 汇编器不认识的写法），所以这里只留下真正需要的那一条 brk。
++ *
++ * kretprobe 把被 hook 函数的返回地址换成这个符号；执行到 brk 时宿主送来
++ * SIGTRAP，arch/um/os-Linux/signal.c 交给 kprobe-trap.c，后者合成 ESR 并转给
++ * kretprobe_brk_handler()，handler 把 PC 改成真实返回地址后再回到调用者。
++ *
++ * 立即数与父架构 asm/brk-imm.h 的 KRETPROBES_BRK_IMM 保持一致（0x007）。
 + */
-+int kprobe_fault_handler(struct pt_regs *regs, unsigned int fsr)
-+{
-+	(void)regs;
-+	(void)fsr;
-+	return 0;
-+}
++	.text
++	.align	2
++	.globl	__kretprobe_trampoline
++	.type	__kretprobe_trampoline, %function
++__kretprobe_trampoline:
++	brk	#0x007
++1:	b	1b
++	.size	__kretprobe_trampoline, . - __kretprobe_trampoline
 diff --git a/arch/arm64/um/os-Linux/Makefile b/arch/arm64/um/os-Linux/Makefile
 index 611e7b6c5..4798f9990 100644
 --- a/arch/arm64/um/os-Linux/Makefile
@@ -599,6 +836,20 @@ index 000000000..049f0118e
 +#endif
 +
 +#endif /* __UM_ASM_KPROBES_H */
+diff --git a/arch/um/kernel/uml.lds.S b/arch/um/kernel/uml.lds.S
+index 131fe2005..e659a7dce 100644
+--- a/arch/um/kernel/uml.lds.S
++++ b/arch/um/kernel/uml.lds.S
+@@ -58,6 +58,9 @@ SECTIONS
+   {
+     _stext = .;
+     TEXT_TEXT
++    /* um-kprobes: ENTRY_TEXT / KPROBES_TEXT */
++    ENTRY_TEXT
++    KPROBES_TEXT
+     SCHED_TEXT
+     LOCK_TEXT
+     IRQENTRY_TEXT
 diff --git a/arch/um/os-Linux/signal.c b/arch/um/os-Linux/signal.c
 index de372b936..4ae327acd 100644
 --- a/arch/um/os-Linux/signal.c

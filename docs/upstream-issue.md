@@ -1,7 +1,7 @@
 # 上游 issue 草稿（lakitu12/linux-um-arm64-gki）
 
 > 待 CI 全绿后再发。附的是仓库里的单补丁
-> `kernel/patches/0001-um-arm64-kprobes-and-module-loading.patch`（17 文件）。
+> `kernel/patches/0001-um-arm64-kprobes-and-module-loading.patch`（21 文件）。
 > 正文用英文，便于上游阅读；中文备注只在本文件里。
 
 ## 标题
@@ -66,7 +66,7 @@ followed by `BRK64_OPCODE_KPROBES_SS`), so no hardware single-step is required.
 works; a test module registering a `kprobe` on a kernel function fires, and a
 `kretprobe` returns through the trampoline.
 
-Patch attached (`0001-um-arm64-kprobes-and-module-loading.patch`, 17 files). Happy to
+Patch attached (`0001-um-arm64-kprobes-and-module-loading.patch`, 21 files). Happy to
 split it per layer, or to move the trap entry out of `os-Linux/signal.c` if you would
 rather have it in `arch/um/drivers`.
 
