@@ -95,6 +95,15 @@ jobs:
           echo "--- module-plts.c 里残留的 kvm 引用（应为 0）---"
           grep -c 'pkvm' ksrc/arch/arm64/kernel/module-plts.c || true
 
+          # 第二个被 CONFIG_MODULES 才暴露的坑：arch/arm64/um/asm/text-patching.h 声明了
+          # void *text_poke_copy(...)，却没按内核惯例定义 text_poke_copy 宏；一旦 EXECMEM
+          # （由 MODULES 拉入）编到 mm/execmem.c，include/linux/text-patching.h 的
+          # static inline 兜底就和原型撞车。补宏即可，实现仍在 UML 的 patching 里。
+          grep -q 'define text_poke_copy text_poke_copy' ksrc/arch/arm64/um/asm/text-patching.h || \
+            printf '\n#ifndef text_poke_copy\n#define text_poke_copy text_poke_copy\n#endif\n' \
+              >> ksrc/arch/arm64/um/asm/text-patching.h
+          tail -4 ksrc/arch/arm64/um/asm/text-patching.h
+
       - name: 构建 bionic 内核
         working-directory: ksrc/tools/um-arm64
         env:
