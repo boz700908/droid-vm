@@ -7,6 +7,7 @@ P=$(cd "$(dirname "$0")" && pwd)
 cp "$P/kprobe-trap.c"   "$K/arch/arm64/um/kprobe-trap.c"
 cp "$P/probe-mem.c"     "$K/arch/arm64/um/probe-mem.c"
 cp "$P/kprobe-signal.c" "$K/arch/arm64/um/os-Linux/kprobe-signal.c"
+cp "$P/kretprobe-trampoline.S" "$K/arch/arm64/um/kretprobe-trampoline.S"
 cp "$P/mem-host.c"      "$K/arch/arm64/um/os-Linux/mem-host.c"
 
 # <asm/kprobes.h> 的桩默认只给 __kprobes 标注，开了 KPROBES 必须换回父架构真头

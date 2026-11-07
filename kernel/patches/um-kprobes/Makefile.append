@@ -6,5 +6,7 @@
 obj-$(CONFIG_KPROBES) += ../kernel/probes/kprobes.o \
 			 ../kernel/probes/decode-insn.o \
 			 ../kernel/probes/simulate-insn.o
-obj-$(CONFIG_KRETPROBES) += ../kernel/probes/kprobes_trampoline.o
+# CONFIG_KRETPROBES 的 trampoline 用自家的：父架构那份 .S 会 include
+# <asm/assembler.h>，其包含链在 UML 下不是汇编安全的。
+obj-$(CONFIG_KRETPROBES) += kretprobe-trampoline.o
 obj-$(CONFIG_KPROBES) += kprobe-trap.o probe-mem.o
