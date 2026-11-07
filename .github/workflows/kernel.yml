@@ -113,7 +113,9 @@ jobs:
           O: ${{ runner.temp }}/um-gki618-build
         run: |
           set -euo pipefail
-          EXTRA="config/docker.config config/docker-completions.config config/snap-flatpak.config config/android-guest.config config/umfb.config"
+          EXTRA="config/docker.config config/docker-completions.config config/snap-flatpak.config"
+          EXTRA="$EXTRA config/android-guest.config config/umfb.config config/vt.config"
+          EXTRA="$EXTRA config/virtio-gpu.config config/virtio-snd.config config/usb-wifi.config"
           if [ "${{ inputs.pages4k }}" = "true" ]; then EXTRA="$EXTRA config/page4k.config"; fi
           if [ -n "${{ inputs.extra_config }}" ]; then EXTRA="$EXTRA ${{ inputs.extra_config }}"; fi
           echo "EXTRA_CONFIG=$EXTRA"
