@@ -119,10 +119,11 @@ jobs:
           if [ "${{ inputs.pages4k }}" = "true" ]; then EXTRA="$EXTRA config/page4k.config"; fi
           if [ -n "${{ inputs.extra_config }}" ]; then EXTRA="$EXTRA ${{ inputs.extra_config }}"; fi
           echo "EXTRA_CONFIG=$EXTRA"
-          EXTRA_CONFIG="$EXTRA"           # UML 的 asm/xor.h 是指向 x86 的符号链接，arm64 SUBARCH 下 x86 内联汇编编不过
+          # UML 的 asm/xor.h 是指向 x86 的符号链接，arm64 SUBARCH 下 x86 内联汇编编不过
           rm -f ksrc/arch/um/include/asm/xor.h
           printf '#include <asm-generic/xor.h>\n' > ksrc/arch/um/include/asm/xor.h
-bash harness/build-bionic.sh
+          rm -f ksrc/arch/um/include/asm/xor.h
+          EXTRA_CONFIG="$EXTRA" bash harness/build-bionic.sh
 
       - name: 核对关键 CONFIG
         run: |
