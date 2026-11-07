@@ -135,9 +135,13 @@ jobs:
           C="${{ runner.temp }}/um-gki618-build/.config"
           test -f "$C" || { echo "找不到 $C"; find "${{ runner.temp }}" -name .config -maxdepth 3; exit 1; }
           echo "===== 关键项实际取值 ====="
-          for k in SMP NR_CPUS MODULES MODULE_UNLOAD KALLSYMS KALLSYMS_ALL KPROBES \
+          for k in SMP NR_CPUS MODULES MODULE_UNLOAD KALLSYMS KALLSYMS_ALL KPROBES KRETPROBES EXECMEM \
                    EXT4_FS OVERLAY_FS FANOTIFY SECURITY SECURITYFS AUDIT SECURITY_SELINUX \
-                   ANDROID_BINDERFS ANDROID_BINDER_IPC MODVERSIONS MODULE_SIG_FORCE DEBUG_INFO_BTF; do
+                   ANDROID_BINDERFS ANDROID_BINDER_IPC ANDROID_BINDER_DEVICES MODVERSIONS MODULE_SIG_FORCE DEBUG_INFO_BTF \
+                   TRACING EVENT_TRACING FTRACE_SYSCALLS KPROBE_EVENTS \
+                   EROFS_FS SQUASHFS FUSE_FS ZRAM PSI MEMCG BLK_CGROUP CGROUP_DEVICE CGROUP_PIDS CPUSETS \
+                   VETH BRIDGE NF_TABLES NET_CLS_ACT NET_SCH_HTB BLK_DEV_THROTTLING CFS_BANDWIDTH \
+                   MEMFD_CREATE TMPFS_XATTR KEYS USER_NS SECCOMP_FILTER; do
             printf '%-24s ' "$k"
             grep -E "^CONFIG_${k}=" "$C" || echo "(未设置)"
           done
