@@ -104,3 +104,14 @@ int um_arm64_kprobe_trap(unsigned long *raw)
 	return 1;
 }
 NOKPROBE_SYMBOL(um_arm64_kprobe_trap);
+
+/*
+ * 父架构在 arch/arm64/mm/fault.c 里实现，UML 的缺页路径不经过 kprobes，
+ * 返回 0 表示「不由 kprobe 处理」，与父架构的语义一致。
+ */
+int kprobe_fault_handler(struct pt_regs *regs, unsigned int fsr)
+{
+	(void)regs;
+	(void)fsr;
+	return 0;
+}
