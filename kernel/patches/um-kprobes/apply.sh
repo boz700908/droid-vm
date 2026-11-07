@@ -77,24 +77,19 @@ if 'arch_um_kprobe_trap' not in s:
 
 print('um-kprobes: 补丁已应用')
 
-# 5) arch/arm64/um/asm/ptrace.h: kprobes 需要 instruction_pointer[_set]
+# 5) arch/arm64/um/asm/ptrace.h: kprobes 需要 instruction_pointer_set
+#    （instruction_pointer 已经是 ptrace-generic.h 里的宏，不能再定义同名函数）
 pt = K / 'arch/arm64/um/asm/ptrace.h'
 s = pt.read_text()
 if 'instruction_pointer_set' not in s:
     snippet = """
 /*
- * UML 的 ptrace 头原本没有这两条；generic kernel/kprobes.c（UP 分支）与
- * arch/arm64/kernel/probes/kprobes.c（XOL 单步改写 PC）都要用。
+ * generic kernel/kprobes.c（UP 分支）与 arch/arm64/kernel/probes/kprobes.c
+ * 都要把 PC 写回 pt_regs；UML 的 ptrace-generic.h 只提供了读宏。
  */
-static inline unsigned long instruction_pointer(struct pt_regs *regs)
-{
-	return PT_REGS_IP(regs);
-}
-
-static inline void instruction_pointer_set(struct pt_regs *regs, unsigned long val)
-{
-	PT_REGS_IP(regs) = val;
-}
+#ifndef instruction_pointer_set
+#define instruction_pointer_set(regs, val) (PT_REGS_IP(regs) = (val))
+#endif
 
 """
     i = s.rstrip().rfind('#endif')
