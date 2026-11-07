@@ -8,6 +8,7 @@ cp "$P/kprobe-trap.c"   "$K/arch/arm64/um/kprobe-trap.c"
 cp "$P/probe-mem.c"     "$K/arch/arm64/um/probe-mem.c"
 cp "$P/kprobe-signal.c" "$K/arch/arm64/um/os-Linux/kprobe-signal.c"
 cp "$P/kretprobe-trampoline.S" "$K/arch/arm64/um/kretprobe-trampoline.S"
+cp "$P/kprobe-cond.c"     "$K/arch/arm64/um/kprobe-cond.c"
 cp "$P/mem-host.c"      "$K/arch/arm64/um/os-Linux/mem-host.c"
 
 # <asm/kprobes.h> 的桩默认只给 __kprobes 标注，开了 KPROBES 必须换回父架构真头
@@ -190,4 +191,20 @@ if hyp in s and 'UML 没有 EL2' not in s:
         + hyp + '#endif\n')
 p.write_text(s)
 print('probes/kprobes.c: pc/regs[] 走宏，hyp 段按 CONFIG_UML 屏蔽')
+PY
+
+# 9) arch/um/kernel/uml.lds.S：__entry_text_* / __kprobes_text_* 这几个边界符号
+#    父架构的链接脚本里有，UML 的没有；kprobes 用它们把不可探测的区域排除掉。
+python3 - "$K" <<'PY'
+import sys, pathlib
+K = pathlib.Path(sys.argv[1])
+p = K / 'arch/um/kernel/uml.lds.S'
+s = p.read_text()
+if 'um-kprobes: ENTRY_TEXT' not in s:
+    old = '    TEXT_TEXT\n'
+    assert old in s, 'uml.lds.S 里找不到 TEXT_TEXT 行'
+    add = old + '    /* um-kprobes: ENTRY_TEXT / KPROBES_TEXT */\n' \
+              + '    ENTRY_TEXT\n    KPROBES_TEXT\n'
+    p.write_text(s.replace(old, add, 1))
+    print('uml.lds.S: 补 ENTRY_TEXT / KPROBES_TEXT')
 PY
