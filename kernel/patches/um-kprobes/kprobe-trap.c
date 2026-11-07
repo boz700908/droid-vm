@@ -16,9 +16,16 @@
 #include <linux/string.h>
 #include <asm/brk-imm.h>
 #include <asm/debug-monitors.h>
-#include <asm/esr.h>
 #include <asm/kprobes.h>
 #include <asm/ptrace.h>
+
+/*
+ * 父架构 <asm/esr.h> 会经 <asm/memory.h> 拉入真 arm64 的地址空间常量
+ * （CONFIG_ARM64_VA_BITS、virt_to_phys 等），UML 侧编不过。这里只用到两个
+ * ESR 编码常量，按 ARM ARM 的定义直接写。
+ */
+#define ESR_ELx_EC_SHIFT	26
+#define ESR_ELx_EC_BRK64	0x3c
 
 /* raw[] 的布局，必须与 arch/arm64/um/os-Linux/kprobe-signal.c 一致 */
 enum {
