@@ -64,6 +64,22 @@ jobs:
       - name: 叠加我们的片段
         run: cp kernel/config/magisk-lkm.config ksrc/tools/um-arm64/config/
 
+      - name: 生成 arm64 生成头
+        run: |
+          # ARCH=um 不会跑 arch/arm64 的 prepare，asm/sysreg-defs.h 永远不会生成；
+          # 而 CONFIG_MODULES 会编 arch/arm64/kernel/module-plts.c，GKI 里它经
+          # kvm_pkvm_module.h → kvm_pgtable.h → kvm_host.h → arch_gicv3.h → sysreg.h
+          # 引到 asm/sysreg-defs.h。按 arch/arm64/tools/Makefile 的规则手工补。
+          set -euo pipefail
+          T=ksrc/arch/arm64/tools
+          awk -f $T/gen-sysreg.awk   $T/sysreg   > /tmp/sysreg-defs.h
+          awk -f $T/gen-cpucaps.awk  $T/cpucaps > /tmp/cpucap-defs.h
+          for d in arch/arm64/include/asm arch/arm64/include/generated/asm; do
+            mkdir -p ksrc/$d
+            cp /tmp/sysreg-defs.h /tmp/cpucap-defs.h ksrc/$d/
+          done
+          wc -l /tmp/sysreg-defs.h /tmp/cpucap-defs.h
+
       - name: 构建 bionic 内核
         working-directory: ksrc/tools/um-arm64
         env:
@@ -81,6 +97,14 @@ jobs:
 
       - name: Alpine 根盘
         run: KOUT=$PWD/artifacts bash rootfs/mkrootfs-alpine.sh
+
+      - name: 失败时上传构建日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: artifacts/*.log
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         with:
