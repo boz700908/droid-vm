@@ -15,7 +15,7 @@
 #ifndef __UM_ARM64_KPROBES_H
 #define __UM_ARM64_KPROBES_H
 
-#ifdef CONFIG_KPROBES
+#if defined(CONFIG_KPROBES) && defined(__aarch64__)
 #include "../../include/asm/kprobes.h"
 #else
 #include <asm-generic/kprobes.h>

@@ -11,6 +11,9 @@ cp "$P/mem-host.c"      "$K/arch/arm64/um/os-Linux/mem-host.c"
 
 # <asm/kprobes.h> 的桩默认只给 __kprobes 标注，开了 KPROBES 必须换回父架构真头
 cp "$P/kprobes-header.h" "$K/arch/arm64/um/asm/kprobes.h"
+cp "$P/kprobes-header-um.h" "$K/arch/um/include/asm/kprobes.h"
+echo "um-kprobes: <asm/kprobes.h> 两处已铺"
+md5sum "$K/arch/arm64/um/asm/kprobes.h" "$K/arch/um/include/asm/kprobes.h"
 
 if ! grep -q 'um-kprobes: patching' "$K/arch/arm64/um/patching.c"; then
 	cat "$P/patching-append.c" >> "$K/arch/arm64/um/patching.c"
