@@ -122,6 +122,8 @@ jobs:
           # UML 的 asm/xor.h 是指向 x86 的符号链接，arm64 SUBARCH 下 x86 内联汇编编不过
           rm -f ksrc/arch/um/include/asm/xor.h
           printf '#include <asm-generic/xor.h>\n' > ksrc/arch/um/include/asm/xor.h
+          # kprobes：父架构 probes 实现 + UML 陷入入口/文本改写（kernel/patches/um-kprobes/）
+          bash kernel/patches/um-kprobes/apply.sh ksrc
           EXTRA_CONFIG="$EXTRA" bash harness/build-bionic.sh
 
       - name: 核对关键 CONFIG

@@ -1,0 +1,10 @@
+
+# --- um-kprobes: Makefile ---
+#
+# 父架构的 probes 实现原样复用（解码、模拟、XOL 指令槽都在里面），UML 只加自己的
+# 陷入入口与 set_memory_*() 替身。对象路径写法与上面的 module.o 一致。
+obj-$(CONFIG_KPROBES) += ../kernel/probes/kprobes.o \
+			 ../kernel/probes/decode-insn.o \
+			 ../kernel/probes/simulate-insn.o
+obj-$(CONFIG_KRETPROBES) += ../kernel/probes/kprobes_trampoline.o
+obj-$(CONFIG_KPROBES) += kprobe-trap.o probe-mem.o
