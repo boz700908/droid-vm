@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# 生成 M0 用的 Alpine ext4 根盘（UML ubd0 直接挂）
+set -euo pipefail
+OUT=${KOUT:-$PWD/out}
+SIZE=${SIZE:-1024M}
+VER=${ALPINE_VER:-3.20}
+mkdir -p "$OUT" work
+cd work
+[ -f rootfs.tar.gz ] || curl -sSLo rootfs.tar.gz "https://dl-cdn.alpinelinux.org/alpine/v${VER}/releases/aarch64/alpine-minirootfs-${VER}.0-aarch64.tar.gz"
+rm -rf root && mkdir -p root
+tar -xzf rootfs.tar.gz -C root
+mkdir -p root/dev root/proc root/sys root/data
+[ -e root/etc/resolv.conf ] || echo "nameserver 1.1.1.1" > root/etc/resolv.conf
+rm -f "$OUT/alpine.ext4"
+mke2fs -q -t ext4 -F -d root -L umroot "$OUT/alpine.ext4" "$SIZE"
+cat > "$OUT/run.sh" <<'RUN'
+#!/bin/sh
+# 在 Termux 里于本目录执行: sh run.sh
+exec ./linux-bionic mem=2048M ubd0=alpine.ext4 root=/dev/ubda rw \
+  init=/bin/sh con0=null,fd:1 "$@"
+RUN
+chmod +x "$OUT/run.sh"
+ls -lh "$OUT"

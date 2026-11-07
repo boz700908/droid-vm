@@ -1,0 +1,64 @@
+name: kernel
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "bionic 或 glibc"
+        default: bionic
+  push:
+    paths:
+      - 'kernel/**'
+      - 'rootfs/**'
+      - '.github/workflows/kernel.yml'
+
+jobs:
+  um-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev libncurses-dev \
+            ccache lld clang e2fsprogs curl xz-utils zstd unzip
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: ccache-
+
+      - name: 取内核源码（作者分支，浅克隆）
+        run: |
+          git clone --depth 1 --branch um-arm64 https://github.com/zalexdev/linux-um-arm64 ksrc
+          git -C ksrc rev-parse HEAD | tee ksrc-sha.txt
+
+      - name: NDK
+        if: ${{ (inputs.mode || 'bionic') == 'bionic' }}
+        run: |
+          curl -sSLo ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q ndk.zip
+          echo "NDK=$PWD/android-ndk-r27c" >> "$GITHUB_ENV"
+
+      - name: 构建内核
+        env:
+          CCACHE_DIR: ~/.ccache
+        run: |
+          MODE=${{ inputs.mode || 'bionic' }} KSRC=$PWD/ksrc OUT=$PWD/out \
+            bash kernel/build.sh
+
+      - name: Alpine 根盘
+        run: KOUT=$PWD/out bash rootfs/mkrootfs-alpine.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: um-arm64-${{ inputs.mode || 'bionic' }}
+          path: |
+            out/linux-*
+            out/alpine.ext4
+            out/run.sh
+            out/build.txt
+            ksrc-sha.txt
