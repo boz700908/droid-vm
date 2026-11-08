@@ -94,28 +94,34 @@ MNT=${REDROID_MNT:-/android}
 [ -b "$IMG" ] || die "$IMG 不是块设备：App 侧没有 android.ext4，或内核没挂上 ubd1"
 mkdir -p "$MNT"
 mountpoint -q "$MNT" || mount -t ext4 -o rw "$IMG" "$MNT" || die "挂 $IMG 到 $MNT 失败"
-# Android 要 /dev /proc /sys；宿主这边已经挂好了，绑定进去即可。
-for d in dev proc sys; do
-  [ -d "$MNT/$d" ] || mkdir -p "$MNT/$d"
-  mountpoint -q "$MNT/$d" || mount --bind "/$d" "$MNT/$d" || die "绑定 /$d 失败"
-done
-# overlayfs 那套：base 共享、diff 私有，镜像本体保持只读不变。
+# Android 的 init 必须是 PID 1，/dev /proc /sys 也要看到宿主的设备与内核，
+# 所以整条拉起链放进 unshare 出来的 mount+pid 命名空间：挂载动作全在命名空间里
+# 做，不会污染 guest 自己的 /。参数既当 init 的 argv 传，也盖到 /proc/cmdline 上，
+# 两种读法都照顾到（docker 那套就是把 androidboot.* 追加成 argv）。
 mkdir -p "$MNT/data-base" "$MNT/data-diff"
+ARGS="qemu=1 androidboot.hardware=redroid androidboot.use_memfd=1 \
+androidboot.redroid_gpu_mode=guest \
+androidboot.redroid_width=${REDROID_W:-1080} \
+androidboot.redroid_height=${REDROID_H:-2400} \
+androidboot.redroid_dpi=${REDROID_DPI:-420} \
+androidboot.redroid_fps=${REDROID_FPS:-30} \
+androidboot.use_redroid_overlayfs=1 androidboot.selinux=permissive \
+ro.secure=0 ro.adb.secure=0"
 
-# 关键：Android 的 init 必须是 PID 1，否则一堆服务会因为「祖先不是 init」失败。
-# docker 里它天然是 PID 1，我们用 unshare 自己造一个 pid 命名空间。
-exec unshare --pid --fork --mount-proc="$MNT/proc" chroot "$MNT" /init \
-  qemu=1 \
-  androidboot.hardware=redroid \
-  androidboot.use_memfd=1 \
-  androidboot.redroid_gpu_mode=guest \
-  androidboot.redroid_width="${REDROID_W:-1080}" \
-  androidboot.redroid_height="${REDROID_H:-2400}" \
-  androidboot.redroid_dpi="${REDROID_DPI:-420}" \
-  androidboot.redroid_fps="${REDROID_FPS:-30}" \
-  androidboot.use_redroid_overlayfs=1 \
-  androidboot.selinux=permissive \
-  ro.secure=0 ro.adb.secure=0
+exec unshare --mount --pid --fork --propagation private /bin/sh -c '
+  set -eu
+  mount --make-rprivate /
+  for d in dev sys; do
+    mkdir -p '"$MNT"'/$d
+    mount --rbind /$d '"$MNT"'/$d
+  done
+  mkdir -p '"$MNT"'/proc
+  mount -t proc proc '"$MNT"'/proc
+  # echo 会把多个词用一个空格连成一行，正好是内核命令行要的格式
+  echo '"$ARGS"' > /tmp/redroid-cmdline
+  mount --bind /tmp/redroid-cmdline '"$MNT"'/proc/cmdline
+  exec chroot '"$MNT"' /init '"$ARGS"'
+'
 REDROIDUP
 chmod 755 root/sbin/redroid-up
 
