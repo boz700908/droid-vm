@@ -18,6 +18,10 @@ on:
         description: "追加的 kconfig 片段，空格分隔，相对 tools/um-arm64/"
         type: string
         default: "config/sukisu-lkm.config"
+      modules_only:
+        description: "快路：只 prepared 内核头 + 外编 .ko（约 8 分钟，不出 linux-bionic）"
+        type: boolean
+        default: false
 
 env:
   NDK_VER: r28c
@@ -76,8 +80,11 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/sukisu"
           python3 "$GITHUB_WORKSPACE/kernel/patches/sukisu-um/ptregs-um.py" kernel
+          # ARCH=um 下 include/arch.h 会撞上内核自己的 arch/um/include/shared/arch.h；
+          # syscall_fn_t 与 vdso 头也要补/绕。见脚本头部说明。
+          python3 "$GITHUB_WORKSPACE/kernel/patches/sukisu-um/um-compat.py" kernel
           # 补丁跑完自检：字段式寄存器访问必须一个不剩（UML 的 regs 不是数组）。
-          if grep -rn -- "->__PT_" --include='*.c' kernel | grep -v '^kernel/include/arch.h'; then
+          if grep -rn -- "->__PT_" --include='*.c' kernel | grep -v '^kernel/include/ksu-arch.h'; then
             echo "还有字段式寄存器访问没改干净"; exit 1
           fi
 
@@ -121,6 +128,7 @@ jobs:
           tail -4 ksrc/arch/arm64/um/asm/text-patching.h
 
       - name: 构建 bionic 内核
+        if: ${{ !inputs.modules_only }}
         working-directory: ksrc/tools/um-arm64
         env:
           NDK: /home/runner/android-ndk
@@ -146,6 +154,62 @@ jobs:
           bash "$GITHUB_WORKSPACE/kernel/patches/um-kprobes/apply.sh" "$TREE"
           EXTRA_CONFIG="$EXTRA" bash harness/build-bionic.sh
 
+      - name: 快路：只准备内核头（modules_only）
+        if: ${{ inputs.modules_only }}
+        env:
+          NDK: /home/runner/android-ndk
+          TREE: ${{ github.workspace }}/ksrc
+          O: ${{ runner.temp }}/um-gki618-build
+        run: |
+          set -euo pipefail
+          TOOL=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+          test -x "$TOOL/clang"
+          # 和 harness/build-bionic.sh 完全一样的 bionic 封装：编模块与编内核
+          # 必须用同一个 --target，否则结构体布局与 vermagic 都对不上。
+          API=$(grep -m1 -o 'API:*-[0-9]\+' ksrc/tools/um-arm64/harness/build-bionic.sh | grep -o '[0-9]\+$' || true)
+          : "${API:=35}"
+          echo "bionic API=$API"
+          SHIM=$O/.bionic-shim
+          mkdir -p "$SHIM"
+          printf '#!/bin/sh\nexec %s/clang "$@" --target=aarch64-linux-android%s\n' "$TOOL" "$API" > "$SHIM/clang"
+          cp "$SHIM/clang" "$SHIM/clang++"
+          chmod +x "$SHIM/clang" "$SHIM/clang++"
+          for t in ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-readelf llvm-strip; do
+            ln -sf "$TOOL/$t" "$SHIM/$t"
+          done
+          export PATH="$SHIM:$TOOL:/usr/bin:$PATH"
+          export KBUILD_BUILD_TIMESTAMP="Thu Jan  1 00:00:00 UTC 1970"
+          export KBUILD_BUILD_USER=um KBUILD_BUILD_HOST=arm64
+          # build-bionic.sh 在编内核前对源码做的两处改写（xor 头、kprobes 移植）
+          # 在「构建 bionic 内核」那一步里；快路跳过了那步，这里补上。
+          for f in "$TREE/arch/x86/include/asm/xor.h" "$TREE/arch/arm64/include/asm/xor.h"; do
+            printf '#include <asm-generic/xor.h>\n' > "$f"
+          done
+          bash "$GITHUB_WORKSPACE/kernel/patches/um-kprobes/apply.sh" "$TREE"
+          MK=(make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1
+              HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ -j"$(nproc)")
+          "${MK[@]}" defconfig
+          "$TREE"/scripts/config --file "$O/.config" -e STATIC_LINK -e UML_NET_VECTOR
+          # 片段必须与上面的「构建 bionic 内核」保持一致：模块编译依赖
+          # MODULES/KPROBES/KALLSYMS_ALL/SELINUX，缺一个编的就是另一套环境。
+          EXTRA="config/smp.config"
+          EXTRA="$EXTRA config/docker.config config/docker-completions.config config/snap-flatpak.config"
+          EXTRA="$EXTRA config/android-guest.config config/umfb.config config/vt.config"
+          EXTRA="$EXTRA config/virtio-gpu.config config/virtio-snd.config config/usb-wifi.config"
+          if [ "${{ inputs.pages4k }}" = "true" ]; then EXTRA="$EXTRA config/page4k.config"; fi
+          EXTRA="$EXTRA ${{ inputs.extra_config }}"
+          for frag in $EXTRA; do
+            "$TREE/scripts/kconfig/merge_config.sh" -m -O "$O" "$O/.config" \
+              "$TREE/tools/um-arm64/$frag" >/dev/null
+          done
+          "${MK[@]}" olddefconfig
+          # modules_prepare 只生成头文件与 scripts，比编整个内核快一个数量级；
+          # 外编 .ko 需要的正是这些。
+          "${MK[@]}" modules_prepare
+          grep -E '^CONFIG_(MODULES|MODPROBE_PATH|KPROBES|KRETPROBES|KALLSYMS_ALL|SECURITY_SELINUX)=' \
+            "$O/.config" || true
+          test -x "$O/.bionic-shim/clang"
+
       - name: 外编 kernelsu.ko 与 kprobe 自测模块
         env:
           NDK: /home/runner/android-ndk
@@ -170,6 +234,15 @@ jobs:
             echo "===== kernelsu.ko 编译失败，去重后的错误 ====="
             grep -aE "error:|fatal error|Error [0-9]" "$ART/kernelsu.log" \
               | sed "s|$GITHUB_WORKSPACE/||" | sort -u | head -40
+            bad=$(grep -aoE '^[A-Za-z0-9_/]+\.c:[0-9]+:' "$ART/kernelsu.log" | head -1 | cut -d: -f1)
+            if [ -n "$bad" ]; then
+              echo "===== $bad 的包含路径（-I 顺序就是 arch.h 撞车的现场） ====="
+              make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1 \
+                   HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ \
+                   M="$GITHUB_WORKSPACE/sukisu/kernel" CONFIG_KSU=m CONFIG_KPM=y \
+                   V=1 -k "${bad%.c}.o" 2>&1 | grep -a 'clang' | head -1 \
+                | tr ' ' '\n' | grep -E '^-I|^-D|^-include' | head -40
+            fi
             exit 1
           fi
           tail -3 "$ART/kernelsu.log"
