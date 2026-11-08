@@ -66,6 +66,9 @@ cat > root/etc/inittab <<'INITTAB'
 # /etc/inittab —— droidvm guest
 ::sysinit:/bin/mount -t proc proc /proc
 ::sysinit:/bin/mount -t sysfs sysfs /sys
+# /dev 由 devtmpfs 挂上后会把镜像里的目录整个遮住，pts 得先建再挂，
+# 否则就是 mount: devpts on /dev/pts failed: No such file or directory。
+::sysinit:/bin/mkdir -p /dev/pts /dev/shm
 ::sysinit:/bin/mount -t devpts devpts /dev/pts
 ::sysinit:/bin/mount -t tmpfs tmpfs /tmp
 ::sysinit:/bin/mount -t tmpfs tmpfs /run
