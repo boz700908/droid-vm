@@ -78,6 +78,11 @@ cat > root/etc/inittab <<'INITTAB'
 ::sysinit:/bin/mount -t tmpfs tmpfs /tmp
 ::sysinit:/bin/mount -t tmpfs tmpfs /run
 ::sysinit:/bin/hostname droidvm
+# 共享目录：App 把 filesDir/share 的绝对路径塞进内核命令行（droidvm_share=），
+# 这里用 hostfs 挂到 /mnt/host —— 两边看到同一份文件，隧道、文件注入都靠它。
+# 没传就跳过，不报错：老版本的 App 不会带这个参数。
+::sysinit:/bin/mkdir -p /mnt/host
+::sysinit:/bin/sh -c 'S=$(sed -n "s/.*droidvm_share=\([^ ]*\).*/\1/p" /proc/cmdline); if [ -n "$S" ]; then mount -t hostfs hostfs /mnt/host -o "$S" && echo "droidvm: 共享目录 $S 已挂到 /mnt/host" >/dev/kmsg || echo "droidvm: 共享目录 $S 挂载失败" >/dev/kmsg; else echo "droidvm: 命令行没有 droidvm_share，跳过共享目录" >/dev/kmsg; fi'
 ::sysinit:/bin/echo droidvm-init: 标准-init-已接管（busybox-init+inittab）>/dev/kmsg
 # App 不是真终端，不走 getty/login 那套提示；sh -l 会读 /etc/profile 拿到 PATH、PS1。
 # UML console 占 TTY_MAJOR(4) minor 0，/dev/console 是 5:1。VT 关掉之后

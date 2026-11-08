@@ -840,9 +840,28 @@ public class MainActivity extends Activity {
              * the APK's library directory rather than from a memfd. */
             cmd.add("stub_exe=" + stub.getAbsolutePath());
             cmd.add("seccomp=" + (seccompBox.isChecked() ? "auto" : "off"));
+            /*
+             * 共享目录：guest 用 hostfs 把它挂到 /mnt/host，App 与 guest 看到
+             * 同一份文件。隧道（控制、文件读写、音频环）和文件注入都落在这里，
+             * 所以先建好再传路径；建不出来就明说，不要静默假装有。
+             */
+            File share = new File(getFilesDir(), "share");
+            if (share.isDirectory() || share.mkdirs()) {
+                cmd.add("droidvm_share=" + share.getAbsolutePath());
+            } else {
+                append("（共享目录建不出来，隧道与文件注入这次用不了）\n");
+            }
             if (rootfs != null) {
                 cmd.add("ubd0=" + rootfs.getAbsolutePath());
                 cmd.add("root=/dev/ubda");
+                /*
+                 * 第二块盘：Android 根盘（redroid 的那份 ext4）。有就挂成 ubd1，
+                 * guest 里是 /dev/ubdb，由 /sbin/redroid-up 挂到 /android 再 chroot。
+                 */
+                File androidImg = new File(getFilesDir(), "android.ext4");
+                if (androidImg.isFile()) {
+                    cmd.add("ubd1=" + androidImg.getAbsolutePath());
+                }
                 cmd.add("rw");
                 /*
                  * 标准启动流程：kernel_init 打开 /dev/console（VT 关掉后这就
