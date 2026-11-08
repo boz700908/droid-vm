@@ -95,10 +95,6 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(12, 12, 12, 12);
-
         /* ---------------------------------------------------------------
          * 无障碍优先的布局约定
          *
