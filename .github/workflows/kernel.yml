@@ -164,7 +164,9 @@ jobs:
           set -euo pipefail
           TOOL=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
           test -x "$TOOL/clang"
-          mkdir -p "${{ github.workspace }}/artifacts"
+          # 这一步没有步骤级 env，ART 得自己给（否则 set -u 下重定向直接炸）
+          ART="${{ github.workspace }}/artifacts"
+          mkdir -p "$ART"
           # 和 harness/build-bionic.sh 完全一样的 bionic 封装：编模块与编内核
           # 必须用同一个 --target，否则结构体布局与 vermagic 都对不上。
           API=$(grep -m1 -o 'API:*-[0-9]\+' ksrc/tools/um-arm64/harness/build-bionic.sh | grep -o '[0-9]\+$' || true)

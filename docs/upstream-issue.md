@@ -66,8 +66,34 @@ UML in the first place.
 Kprobes uses the XOL model here (`arch_prepare_ss_slot` writes the original instruction
 followed by `BRK64_OPCODE_KPROBES_SS`), so no hardware single-step is required.
 
+**One thing that is still out of reach**, so you know before reading the patch:
+`CONFIG_KPROBE_EVENTS` needs `HAVE_REGS_AND_STACK_ACCESS_API`, i.e. real arm64
+`regs_get_register()` / `regs_get_kernel_stack_nth()`. UML does not build
+`arch/arm64/kernel/stacktrace.c`, so kprobe events stay unavailable. Plain
+`register_kprobe()` / `register_kretprobe()` work, which is what LKMs use; I did not fake
+the symbol just to light up the config.
+
+**For out-of-tree modules** (this cost me a week of CI round-trips; three gaps only appear
+under `ARCH=um`, which is why no module author has hit them):
+
+1. `-I$(srctree)/arch/um/include/shared` is passed before a module's own `-I`, and that
+   directory contains a kernel `arch.h` guarded by `__ARCH_H__`. Any module with a header
+   of that name silently includes the UML one instead of its own. Worth either renaming
+   that header or moving it out of the global include path.
+2. `arch/arm64/um/asm/syscall.h` has only the old six-argument `sys_call_ptr_t`; real
+   arm64 defines `syscall_fn_t` (one `const struct pt_regs *`) in
+   `arch/arm64/include/asm/syscall.h`. Anything declaring a syscall table for the
+   one-argument signature needs a local `typedef`. Adding it to the UML header would be
+   one line and is what I would suggest.
+3. `<vdso/datapage.h>` reaches `arch/arm64/include/asm/vdso/gettimeofday.h`, which pulls
+   `asm/arch_timer.h` (real `ALTERNATIVE`, `isb`, `mrs cntpct_el0`) and `vdso/processor.h`
+   (`cpu_relax` redefinition). Anything touching the vdso page or clocksource needs a
+   `CONFIG_UML` gate there; there is no vdso page to rewrite in UML anyway.
+
+Happy to send the tiny `syscall_fn_t` patch separately if you want it in the tree.
+
 **Testing.** On `ARCH=um SUBARCH=arm64` with `CONFIG_MODULES=y`, `CONFIG_KPROBES=y`,
-`CONFIG_KRETPROBES=y`, `CONFIG_KPROBE_EVENTS=y`, `CONFIG_KALLSYMS_ALL=y`: the kernel
+`CONFIG_KRETPROBES=y`, `CONFIG_KALLSYMS_ALL=y`: the kernel
 builds clean from a pristine checkout with clang 20 / bionic target / 4 KiB pages, and
 links (`vmlinux` + `kernelsu.ko` built against it), in CI on ubuntu-24.04. Boot-time and
 runtime verification (`insmod`/`rmmod`, a probe firing, a kretprobe returning through the
@@ -85,4 +111,7 @@ rather have it in `arch/um/drivers`.
 - [ ] 手机侧按 `docs/M0-phone.md` 至少 M0 通过（`nproc > 1`、`umlfb` 出帧）再发，
       正文可补一句真机已验证。
 - [ ] 补丁里不能出现 `sukisu`/`ksu`/`kpm` 字样（当前 grep 为 0）。
-- [ ] 「Testing」里写的每一项都必须是真跑过的，没跑过的删掉。
+- [ ] 「Testing」里写的每一项都必须是真跑过的，没跑过的删掉。已删掉
+      `CONFIG_KPROBE_EVENTS=y`（拿不到 `HAVE_REGS_AND_STACK_ACCESS_API`）。
+- [ ] 「For out-of-tree modules」三条是**模块侧**发现，不是补丁内容；发 issue 时
+      确认措辞是「建议」而不是「你们错了」。
