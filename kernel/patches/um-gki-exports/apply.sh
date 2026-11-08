@@ -20,6 +20,17 @@ want = [
     ('mm/maccess.c',               'EXPORT_SYMBOL_GPL(strncpy_from_user_nofault);'),
     # sys_enter 事件本身在，只是没人导出过；模块靠它注册 syscall 钩子。
     ('kernel/trace/trace_syscalls.c', 'EXPORT_TRACEPOINT_SYMBOL_GPL(sys_enter);'),
+    # 第二批：SukiSU 在 arm64/GKI 上直接用的内部函数，本树有定义但没导出。
+    ('fs/namespace.c',             'EXPORT_SYMBOL_GPL(path_mount);'),
+    ('fs/fs_struct.c',             'EXPORT_SYMBOL_GPL(set_fs_pwd);'),
+    ('fs/open.c',                  'EXPORT_SYMBOL_GPL(dentry_open_nonotify);'),
+    ('kernel/kallsyms.c',          'EXPORT_SYMBOL_GPL(kallsyms_lookup_name);'),
+    ('kernel/kallsyms.c',          'EXPORT_SYMBOL_GPL(kallsyms_lookup);'),
+    ('kernel/kallsyms.c',          'EXPORT_SYMBOL_GPL(kallsyms_on_each_symbol);'),
+    ('kernel/user.c',              'EXPORT_SYMBOL_GPL(alloc_uid);'),
+    ('kernel/cred.c',              'EXPORT_SYMBOL_GPL(set_cred_ucounts);'),
+    ('kernel/seccomp.c',           'EXPORT_SYMBOL_GPL(seccomp_filter_release);'),
+    ('fs/ext4/sysfs.c',            'EXPORT_SYMBOL_GPL(ext4_unregister_sysfs);'),
 ]
 
 for rel, line in want:

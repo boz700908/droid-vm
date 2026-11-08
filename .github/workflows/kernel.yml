@@ -280,9 +280,20 @@ jobs:
             # modpost 一次只打 10 条 undefined 就封嘴，剩下的看不见。自己算一遍：
             # 模块全部 undefined − 内核 Module.symvers 导出 = 要补的完整清单；
             # 顺带打 symvers 条数与关键 CONFIG，判断是不是内核压根没导出。
-            echo "===== 仍未解析的符号（模块 undefined − 内核导出）====="
-            "$TOOL/llvm-nm" --undefined-only $(find "$GITHUB_WORKSPACE/sukisu/kernel" -name '*.o') 2>/dev/null \
-              | awk '$1=="U"{print $2}' | sed 's/@.*//' | sort -u > /tmp/undef.txt || true
+            # 注意：不能拿所有 .o 做 nm -u，模块内部互引（ksu_*）会全部冒出来。
+            # 先用 KBUILD_MODPOST_WARN 放行 modpost 拿到链接好的 kernelsu.ko，
+            # 它的 undefined 才是真正要外部解析的集合。
+            echo "===== 放宽 modpost 重编一次，只为拿到完整清单 ====="
+            make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1 \
+                 HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ \
+                 M="$GITHUB_WORKSPACE/sukisu/kernel" CONFIG_KSU=m CONFIG_KPM=y \
+                 KBUILD_MODPOST_WARN=1 -j"$(nproc)" -k modules \
+                 > "$ART/kernelsu-warn.log" 2>&1 || true
+            KO=$(find "$GITHUB_WORKSPACE/sukisu/kernel" -name 'kernelsu.ko' | head -1)
+            echo "===== 仍未解析的符号（kernelsu.ko undefined − 内核导出）====="
+            echo "kernelsu.ko: ${KO:-没生成}"
+            [ -n "$KO" ] && "$TOOL/llvm-nm" --undefined-only "$KO" \
+              | awk '{print $2}' | sed 's/@.*//' | sort -u > /tmp/undef.txt || : > /tmp/undef.txt
             awk '{print $2}' "$O/Module.symvers" 2>/dev/null | sed 's/@.*//' | sort -u > /tmp/exp.txt || true
             comm -23 /tmp/undef.txt /tmp/exp.txt | tr '\n' ' ' | cut -c1-3000; echo
             echo "内核导出条数: $(wc -l < /tmp/exp.txt)"
