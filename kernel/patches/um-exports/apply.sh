@@ -13,10 +13,18 @@
 set -euo pipefail
 
 TREE=${1:-ksrc}
+# 调用方可能不在仓库根目录（CI 里这一步的 cwd 是 sukisu/），
+# 相对路径先按当前目录找，找不到再按 $GITHUB_WORKSPACE 找。
+case "$TREE" in
+/*) ;;
+*) if [ ! -d "$TREE" ] && [ -n "${GITHUB_WORKSPACE:-}" ]; then
+	TREE="$GITHUB_WORKSPACE/$TREE"
+fi ;;
+esac
 F="$TREE/fs/namespace.c"
 
 if [ ! -f "$F" ]; then
-	echo "找不到 $F" >&2
+	echo "找不到 $F（当前目录 $(pwd)）" >&2
 	exit 1
 fi
 if grep -q 'EXPORT_SYMBOL.*path_umount' "$F"; then

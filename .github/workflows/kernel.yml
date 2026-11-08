@@ -89,7 +89,8 @@ jobs:
           # 目标内核是 GKI 风格，VFS 内部符号的命名空间带 ANDROID_GKI_ 前缀。
           python3 "$GITHUB_WORKSPACE/kernel/patches/sukisu-um/um-ns-import.py" kernel
           # 内核侧：path_umount 在 mainline 没有导出，而 SukiSU 直接调用它。
-          bash "$GITHUB_WORKSPACE/kernel/patches/um-exports/apply.sh" ksrc
+          # 注意本 step 的 cwd 是 sukisu/，内核树必须用绝对路径。
+          bash "$GITHUB_WORKSPACE/kernel/patches/um-exports/apply.sh" "$GITHUB_WORKSPACE/ksrc"
           # 补丁跑完自检：字段式寄存器访问必须一个不剩（UML 的 regs 不是数组）。
           if grep -rn -- "->__PT_" --include='*.c' kernel | grep -v '^kernel/include/ksu-arch.h'; then
             echo "还有字段式寄存器访问没改干净"; exit 1
