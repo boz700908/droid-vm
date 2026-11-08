@@ -34,8 +34,12 @@
 1. **状态变化挂 live region（polite）**，由读屏自己念，不抢焦点、不打断别的朗读。
    状态行只有一句：`状态：正在启动…` / `状态：内核已退出，退出码 139`。
 2. **内核输出绝不逐行播报**。一次启动几十行，逐行念等于把人淹掉。输出的
-   live region 设成 `NONE`，只在用户按「朗读最后三行」时念——那是对按键的回答，
+   live region 设成 `NONE`，只在用户明确按键时才念——那是对按键的回答，
    按规则可以替换正在进行的朗读。
+   读输出由两颗按钮成对承担：**「读最新三行」** 与 **「读更早三行」**。
+   只给一个「最后三行」是不够的：几十行输出里想听中间那段，用户会彻底卡住。
+   每按一次念三行、并且先报位置（`第 7 到 9 行，共 41 行`），否则用户不知道
+   自己在哪，翻两次就迷路。位置以「非空行」计数，之后新增的输出不会打乱它。
 3. **不自己起 TTS**。走 `announceForAccessibility`：用户关掉读屏就不出声。
    这是「无障碍优先」，不是「无论如何都出声」。
 4. 一次性回答（「已复制全部输出，共 N 个字符」「内核未运行，先按启动」）只说一句，
@@ -47,7 +51,7 @@
 
 - `app/src/org/droidvm/host/MainActivity.java` —— 界面与全部播报；
   无障碍层集中在文件末尾的 `setStatus` / `setRunning` / `announce` /
-  `lastLines` / `copyAll` / `dp`。
+  `logLines` / `readNewest` / `readOlder` / `announceChunk` / `copyAll` / `dp`。
 - `app/res/xml/device_filter.xml` —— USB 直通的 VID/PID（十进制），
   与 `USB_VENDOR` / `USB_PRODUCT` 必须一起改。
 - `app/build-apk.sh` —— 无 Gradle 打包。

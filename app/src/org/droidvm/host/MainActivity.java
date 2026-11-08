@@ -232,17 +232,31 @@ public class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(
                 LayoutParams.MATCH_PARENT, 0, 1.0f));
 
+        /*
+         * 三颗按钮竖排：字号放大到 2 倍时横排会把「读更早三行」这类文字截断。
+         * 「读更早」和「读最新」必须成对出现 —— 只给一个「最后三行」的话，
+         * 一次启动就是几十行输出，用户没有任何办法往上游翻。
+         */
         LinearLayout logActions = new LinearLayout(this);
-        logActions.setOrientation(LinearLayout.HORIZONTAL);
+        logActions.setOrientation(LinearLayout.VERTICAL);
 
-        Button speak = new Button(this);
-        speak.setText("朗读最后三行");
-        speak.setMinHeight(dp(48));
-        speak.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { announce(lastLines(3)); }
+        Button older = new Button(this);
+        older.setText("读更早三行");
+        older.setMinHeight(dp(48));
+        older.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { readOlder(); }
         });
-        logActions.addView(speak, new LinearLayout.LayoutParams(0,
-                LayoutParams.WRAP_CONTENT, 1.0f));
+        logActions.addView(older, new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+
+        Button newest = new Button(this);
+        newest.setText("读最新三行");
+        newest.setMinHeight(dp(48));
+        newest.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { readNewest(); }
+        });
+        logActions.addView(newest, new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
         Button copy = new Button(this);
         copy.setText("复制全部输出");
@@ -250,15 +264,15 @@ public class MainActivity extends Activity {
         copy.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { copyAll(); }
         });
-        logActions.addView(copy, new LinearLayout.LayoutParams(0,
-                LayoutParams.WRAP_CONTENT, 1.0f));
+        logActions.addView(copy, new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
         root.addView(logActions, new LinearLayout.LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
         /* --- 输入行，接到 guest 的 stdin --- */
         input = new EditText(this);
-        input.setHint("输入命令，回车发给 guest");
+        input.setHint("输入命令，按软键盘的发送键发出");
         input.setContentDescription("发给 guest 的命令");
         input.setSingleLine(true);
         input.setMinHeight(dp(48));
@@ -920,22 +934,61 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** 最后 n 个非空行，合成一段念出来；空行会让读屏停顿却没内容。 */
-    private String lastLines(int n) {
+    /* 上一次念到的片段起点；-1 表示还没念过。以「非空行」为单位计数，
+     * 于是之后追加的新输出不会打乱已经建立的位置。 */
+    private int readAnchor = -1;
+
+    /** 日志的非空行。空行会让读屏停顿却没内容，先剔掉。 */
+    private List<String> logLines() {
+        List<String> out = new ArrayList<>();
         CharSequence c = log.getText();
-        if (c == null || c.length() == 0)
-            return "还没有输出";
-        String[] lines = c.toString().split("\n");
-        StringBuilder b = new StringBuilder();
-        int used = 0;
-        for (int i = lines.length - 1; i >= 0 && used < n; i--) {
-            String t = lines[i].trim();
-            if (t.length() == 0)
-                continue;
-            b.insert(0, t + "\n");
-            used++;
+        if (c != null) {
+            for (String s : c.toString().split("\n")) {
+                String t = s.trim();
+                if (t.length() > 0)
+                    out.add(t);
+            }
         }
-        return used == 0 ? "还没有输出" : b.toString().trim();
+        return out;
+    }
+
+    /** 念最新三行。 */
+    private void readNewest() {
+        List<String> all = logLines();
+        if (all.isEmpty()) {
+            announce("还没有输出");
+            return;
+        }
+        int end = all.size();
+        int start = Math.max(0, end - 3);
+        readAnchor = start;
+        announceChunk(all, start, end);
+    }
+
+    /** 往上翻三行；还没念过时等同于念最新。 */
+    private void readOlder() {
+        List<String> all = logLines();
+        if (all.isEmpty()) {
+            announce("还没有输出");
+            return;
+        }
+        int end = (readAnchor < 0) ? all.size() : readAnchor;
+        if (end <= 0) {
+            announce("已经到最早一行了，共 " + all.size() + " 行");
+            return;
+        }
+        int start = Math.max(0, end - 3);
+        readAnchor = start;
+        announceChunk(all, start, end);
+    }
+
+    /** 一段一次说完，并且报出位置——用户得知道自己翻到哪了。 */
+    private void announceChunk(List<String> all, int start, int end) {
+        StringBuilder b = new StringBuilder();
+        for (int i = start; i < end; i++)
+            b.append(all.get(i)).append('\n');
+        announce("第 " + (start + 1) + " 到 " + end + " 行，共 " + all.size() + " 行\n"
+                + b.toString().trim());
     }
 
     private void copyAll() {
