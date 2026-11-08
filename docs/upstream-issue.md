@@ -32,7 +32,7 @@ KernelSU / SukiSU / KPM-style LKMs, live-patching modules, and anything calling
 cannot be used as a Magisk/KSU host — the main reason people want a real kernel under
 UML in the first place.
 
-**What the patch does** (four layers, all inside `arch/`):
+**What the patch does** (five layers, all inside `arch/`):
 
 1. **Trap routing.** `arch/um/os-Linux/signal.c` intercepts a host `SIGTRAP` first and
    hands the register file to `arch/arm64/um/kprobe-trap.c`, which materialises a
@@ -56,15 +56,23 @@ UML in the first place.
    `BRK64_OPCODE_KPROBES{,_SS}` encodings and `DBG_HOOK_*`; the arm64-only accesses in
    `probes/kprobes.c` (`pstate`, `pc`, `regs[]`) go through the `PT_REGS_*` accessors,
    and the EL2 `__hyp_text*` blacklist is compiled out under `CONFIG_UML`.
+5. **Linker and decode helpers.** `arch/um/kernel/uml.lds.S` now emits
+   `ENTRY_TEXT` / `KPROBES_TEXT`, so the `__entry_text_*` and `__kprobes_text_*`
+   boundaries that `kernel/kprobes.c` and `arch_populate_kprobe_blacklist()` test
+   against actually exist; and `arch/arm64/um/kprobe-cond.c` supplies the
+   `aarch32_opcode_cond_checks[]` table `simulate-insn.c` calls, which normally lives
+   in `arch/arm64/kernel/traps.c` and is therefore not built for UML.
 
 Kprobes uses the XOL model here (`arch_prepare_ss_slot` writes the original instruction
 followed by `BRK64_OPCODE_KPROBES_SS`), so no hardware single-step is required.
 
 **Testing.** On `ARCH=um SUBARCH=arm64` with `CONFIG_MODULES=y`, `CONFIG_KPROBES=y`,
-`CONFIG_KRETPROBES=y`, `CONFIG_KPROBE_EVENTS=y`: the kernel builds clean with clang 20
-(bionic target, 4 KiB pages) and boots under UML; `insmod`/`rmmod` of a trivial module
-works; a test module registering a `kprobe` on a kernel function fires, and a
-`kretprobe` returns through the trampoline.
+`CONFIG_KRETPROBES=y`, `CONFIG_KPROBE_EVENTS=y`, `CONFIG_KALLSYMS_ALL=y`: the kernel
+builds clean from a pristine checkout with clang 20 / bionic target / 4 KiB pages, and
+links (`vmlinux` + `kernelsu.ko` built against it), in CI on ubuntu-24.04. Boot-time and
+runtime verification (`insmod`/`rmmod`, a probe firing, a kretprobe returning through the
+trampoline) is being run on the target device now — I will report the results here rather
+than claim them silently.
 
 Patch attached (`0001-um-arm64-kprobes-and-module-loading.patch`, 21 files). Happy to
 split it per layer, or to move the trap entry out of `os-Linux/signal.c` if you would
