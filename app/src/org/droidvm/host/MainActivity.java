@@ -369,7 +369,50 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * The guest's busybox line editor asks the terminal for the cursor
+     * position (ESC[6n) on every prompt, and neither the TextView nor
+     * boot.log is a terminal, so the query -- and whatever colour or cursor
+     * escape a command emits -- would otherwise be shown as litter. We are
+     * not a terminal and cannot answer it; drop the sequences.
+     */
+    private static String stripEscapes(String s) {
+        if (s.indexOf('\u001b') < 0)
+            return s;
+        StringBuilder b = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c != '\u001b') {
+                b.append(c);
+                continue;
+            }
+            if (i + 1 >= s.length())
+                break;
+            char kind = s.charAt(++i);
+            if (kind == '[') {
+                while (i + 1 < s.length()) {
+                    char d = s.charAt(++i);
+                    if (d >= '@' && d <= '~')
+                        break;
+                }
+            } else if (kind == ']') {
+                while (i + 1 < s.length()) {
+                    char d = s.charAt(++i);
+                    if (d == '\u0007')
+                        break;
+                    if (d == '\u001b' && i + 1 < s.length()
+                            && s.charAt(i + 1) == '\\') {
+                        i++;
+                        break;
+                    }
+                }
+            }
+        }
+        return b.toString();
+    }
+
     private void append(String s) {
+        s = stripEscapes(s);
         logToFile(s);
         ui.post(new Appender(s));
     }
