@@ -67,6 +67,13 @@ fi
 # 换掉：sysinit 自己挂文件系统，tty0 上 respawn 一个登录 shell。
 # 以后要用服务管理（sshd、redroid 之类），apk add openrc 后把原版那三行
 # openrc sysinit/boot/default 加回来即可。
+# 隧道对端（Python，镜像里本来就有 python3）。装进 /usr/local/bin，
+# 由 inittab 在共享目录挂上之后拉起来；挂不上就什么都不做。
+SRC=$(cd "$(dirname "$0")" && pwd)
+mkdir -p root/usr/local/bin
+cp "$SRC/guest-agent.py" root/usr/local/bin/guest-agent.py
+chmod 755 root/usr/local/bin/guest-agent.py
+
 # redroid 的拉起脚本。参数不是猜的：全部来自官方文档的 androidboot.* 那一套
 # （见 docs/redroid-notes.md）。ashmem 在 GKI 里已经没有了，所以必须 use_memfd；
 # UML 里没有 GPU，所以 gpu_mode 固定 guest（纯软件渲染）。
@@ -126,6 +133,8 @@ cat > root/etc/inittab <<'INITTAB'
 ::sysinit:/bin/mkdir -p /mnt/host
 ::sysinit:/bin/sh -c 'S=$(sed -n "s/.*droidvm_share=\([^ ]*\).*/\1/p" /proc/cmdline); if [ -n "$S" ]; then mount -t hostfs hostfs /mnt/host -o "$S" && echo "droidvm: 共享目录 $S 已挂到 /mnt/host" >/dev/kmsg || echo "droidvm: 共享目录 $S 挂载失败" >/dev/kmsg; else echo "droidvm: 命令行没有 droidvm_share，跳过共享目录" >/dev/kmsg; fi'
 ::sysinit:/bin/echo droidvm-init: 标准-init-已接管（busybox-init+inittab）>/dev/kmsg
+# 共享目录一旦挂上就把隧道对端拉起来；没挂就说明这一版 App 没传参数，跳过。
+::sysinit:/bin/sh -c 'mountpoint -q /mnt/host && { setsid python3 /usr/local/bin/guest-agent.py </dev/null >/dev/null 2>&1 & echo "droidvm: 隧道对端已拉起" >/dev/kmsg; } || true'
 # App 不是真终端，不走 getty/login 那套提示；sh -l 会读 /etc/profile 拿到 PATH、PS1。
 # UML console 占 TTY_MAJOR(4) minor 0，/dev/console 是 5:1。VT 关掉之后
 # devtmpfs 未必替我们建这两个节点，busybox init 打不开控制终端就静默跳过，
