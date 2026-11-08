@@ -29,13 +29,18 @@ fi
 # binfmt/qemu。包名与用途：
 #   util-linux(-misc)  unshare/nsenter/setsid/findmnt/lsns（redroid 启动器靠它）
 #   android-tools      adb 客户端，连 guest 内 redroid 的 adbd
-#   python3            拆镜像、算布局、写启动脚本
+# python3 实测 42MB（/usr/lib/python3.12），会把根盘从 8MB 撑到 100MB+，
+# APK 跟着涨到 70MB 上下。它只是顺手，不是必需：真要在 guest 里用就在
+# guest 里 apk add python3 一次。所以不进镜像。
 #   curl strace iproute2
 #   gcompat            glibc 兜底，万一要跑官方预编译二进制
 # 故意不装 openrc：M0/M1 用不到服务管理，需要时再加，并把 inittab 里的
 # openrc sysinit/boot/default 三行恢复。
-GUEST_PKGS=${GUEST_PKGS:-util-linux util-linux-misc android-tools python3 curl strace iproute2 gcompat}
+GUEST_PKGS=${GUEST_PKGS:-util-linux util-linux-misc android-tools curl strace iproute2 gcompat}
 if [ -n "$GUEST_PKGS" ]; then
+  # 仓库版本跟着根盘走，免得 ALPINE_VER 改了而这里还用老版本号。
+  VER=$(cut -d. -f1,2 root/etc/alpine-release)
+  echo "mkrootfs: 补包仓库 v$VER"
   mkdir -p apkstatic
   if [ ! -x apkstatic/sbin/apk.static ]; then
     aname=$(curl -s "https://dl-cdn.alpinelinux.org/alpine/v${VER}/main/x86_64/" \
