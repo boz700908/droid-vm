@@ -20,6 +20,7 @@
    UML 也没有可改写的 vdso 页。跳过并如实记账（++missing），不谎报成功。
 """
 import pathlib
+import re
 import sys
 
 MARK = 'KSU_UM_COMPAT'
@@ -47,6 +48,31 @@ def patch_arch_include(root):
     left = [str(p.relative_to(root)) for p in files if '#include "arch.h"' in p.read_text()]
     assert not left, '还有文件引用 arch.h: %s' % left
     print('include/arch.h: %d 个文件改成 #include "ksu-arch.h"' % n)
+
+
+def patch_arch_symbols(root):
+    """REBOOT_SYMBOL / SYS_*_SYMBOL 与寄存器布局无关，UML 分支里也要有。
+
+    ptregs-um.py 把整个 __aarch64__ 块包成「CONFIG_UML 分支 / #else 原块」，
+    而 #else 里除了必须关掉的字段式宏，还塞着这几个符号名——supercall.c 用它就
+    报 undeclared。这里把 #else 里的 *_SYMBOL 定义原样复制一份到 UML 分支，
+    上游以后再加一个符号名也自动跟上。
+    """
+    p = root / 'include' / 'ksu-arch.h'
+    s = p.read_text()
+    if MARK + '符号名' in s:
+        print('ksu-arch.h: 符号名已复制')
+        return
+    anchor = '#else\n#define __PT_PARM1_REG regs[0]\n'
+    assert anchor in s, 'ksu-arch.h 的 #else 分支结构变了'
+    head, tail = s.split(anchor, 1)
+    body = tail.split('#endif /* CONFIG_UML */', 1)[0]
+    syms = [ln for ln in body.splitlines() if re.match(r'#define [A-Z0-9_]+_SYMBOL ', ln)]
+    assert syms, '#else 分支里没有 *_SYMBOL 定义'
+    add = ('/* %s符号名：与 pt_regs 布局无关，UML 分支也要有。 */\n' % MARK
+           + '\n'.join(syms) + '\n\n' + anchor)
+    p.write_text(head + add + tail)
+    print('ksu-arch.h: 复制了 %d 个 *_SYMBOL 到 UML 分支' % len(syms))
 
 
 def patch_syscall_hook_h(root):
@@ -98,5 +124,6 @@ def patch_cpu_spoof(root):
 if __name__ == '__main__':
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else 'kernel')
     patch_arch_include(root)
+    patch_arch_symbols(root)
     patch_syscall_hook_h(root)
     patch_cpu_spoof(root)

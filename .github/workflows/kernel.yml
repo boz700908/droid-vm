@@ -207,6 +207,14 @@ jobs:
           # modules_prepare 只生成头文件与 scripts，比编整个内核快一个数量级；
           # 外编 .ko 需要的正是这些。
           "${MK[@]}" modules_prepare
+          # 模块里 selinux/* 要 include <flask.h>，那是编译 security/selinux 时才
+          # 生成的头（modules_prepare 不管）。全量构建顺带就有了，快路得自己补，
+          # 否则会看到一堆假的 "fatal error: 'flask.h' file not found"。
+          "${MK[@]}" security/selinux/ > "$ART/selinux-headers.log" 2>&1 || {
+            echo "===== 生成 security/selinux 头失败 ====="
+            grep -aE "error:|Error [0-9]" "$ART/selinux-headers.log" | head -20
+            exit 1
+          }
           grep -E '^CONFIG_(MODULES|MODPROBE_PATH|KPROBES|KRETPROBES|KALLSYMS_ALL|SECURITY_SELINUX)=' \
             "$O/.config" || true
           test -x "$O/.bionic-shim/clang"
