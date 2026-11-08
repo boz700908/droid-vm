@@ -216,7 +216,11 @@ jobs:
         run: |
           set -euo pipefail
           EXTRA="config/docker.config config/docker-completions.config config/snap-flatpak.config"
-          EXTRA="$EXTRA config/android-guest.config config/umfb.config config/vt.config"
+          EXTRA="$EXTRA config/android-guest.config config/umfb.config"
+          # 故意不并入 config/vt.config：CONFIG_VT 会占走 TTY_MAJOR(4)，
+          # UML stdio console 的 tty_register_driver() 随即 -EBUSY，结果是
+          # /dev/tty0 变成 dummycon（写进黑洞）、/dev/console 打不开、init 拿不到
+          # stdio、guest 里完全没法输入。VT 只在「guest 要跑 Xorg」的变体里加。
           EXTRA="$EXTRA config/virtio-gpu.config config/virtio-snd.config config/usb-wifi.config"
           if [ "${{ inputs.pages4k }}" = "true" ]; then EXTRA="$EXTRA config/page4k.config"; fi
           if [ -n "${{ inputs.extra_config }}" ]; then EXTRA="$EXTRA ${{ inputs.extra_config }}"; fi
@@ -275,7 +279,11 @@ jobs:
           # MODULES/KPROBES/KALLSYMS_ALL/SELINUX，缺一个编的就是另一套环境。
           EXTRA="config/smp.config"
           EXTRA="$EXTRA config/docker.config config/docker-completions.config config/snap-flatpak.config"
-          EXTRA="$EXTRA config/android-guest.config config/umfb.config config/vt.config"
+          EXTRA="$EXTRA config/android-guest.config config/umfb.config"
+          # 故意不并入 config/vt.config：CONFIG_VT 会占走 TTY_MAJOR(4)，
+          # UML stdio console 的 tty_register_driver() 随即 -EBUSY，结果是
+          # /dev/tty0 变成 dummycon（写进黑洞）、/dev/console 打不开、init 拿不到
+          # stdio、guest 里完全没法输入。VT 只在「guest 要跑 Xorg」的变体里加。
           EXTRA="$EXTRA config/virtio-gpu.config config/virtio-snd.config config/usb-wifi.config"
           if [ "${{ inputs.pages4k }}" = "true" ]; then EXTRA="$EXTRA config/page4k.config"; fi
           EXTRA="$EXTRA ${{ inputs.extra_config }}"
