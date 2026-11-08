@@ -99,6 +99,28 @@ mountpoint -q "$MNT" || mount -t ext4 -o rw "$IMG" "$MNT" || die "挂 $IMG 到 $
 # 做，不会污染 guest 自己的 /。参数既当 init 的 argv 传，也盖到 /proc/cmdline 上，
 # 两种读法都照顾到（docker 那套就是把 androidboot.* 追加成 argv）。
 mkdir -p "$MNT/data-base" "$MNT/data-diff"
+
+# 镜像里没有任何地方设 service.adb.tcp.port（vendor/etc/init/init.redroid.rc 是
+# 0 字节的空文件），adbd 于是不会监听 TCP，guest 里就 adb connect 不上。这里补一份
+# vendor rc：init 会加载 /vendor/etc/init/*.rc，permissive 下不需要额外标签。
+if [ ! -f "$MNT/vendor/etc/init/init.droidvm.rc" ]; then
+  mkdir -p "$MNT/vendor/etc/init"
+  cat > "$MNT/vendor/etc/init/init.droidvm.rc" <<'RC'
+on init
+    setprop service.adb.tcp.port 5555
+    setprop persist.adb.tcp.port 5555
+    start adbd
+
+# 没有 USB 的情况下 init 阶段拉 adbd 可能还没就绪，boot 完再补一次
+on boot
+    start adbd
+RC
+  log "已补 /vendor/etc/init/init.droidvm.rc（adb 监听 tcp 5555）"
+fi
+
+# Android 的 init 自己会 ifup lo，但那条 rc 万一失败就一点网络都没有，
+# 这里先起一遍，多做一次没有副作用。
+ip link set lo up 2>/dev/null || ifconfig lo up 2>/dev/null || true
 ARGS="qemu=1 androidboot.hardware=redroid androidboot.use_memfd=1 \
 androidboot.redroid_gpu_mode=guest \
 androidboot.redroid_width=${REDROID_W:-1080} \
