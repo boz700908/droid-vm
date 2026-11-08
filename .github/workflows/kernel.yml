@@ -167,8 +167,7 @@ jobs:
           fi
 
       - name: 叠加我们的片段
-        run: cp kernel/config/sukisu-lkm.config ksrc/tools/um-arm64/config/
-          cp kernel/config/redroid-extra.config ksrc/tools/um-arm64/config/
+        run: cp kernel/config/sukisu-lkm.config kernel/config/redroid-extra.config ksrc/tools/um-arm64/config/
 
       - name: 生成 arm64 生成头 + 修 GKI 的 KVM 头依赖
         run: |
@@ -217,8 +216,7 @@ jobs:
         run: |
           set -euo pipefail
           EXTRA="config/docker.config config/docker-completions.config config/snap-flatpak.config"
-          EXTRA="$EXTRA config/android-guest.config config/umfb.config"
-          EXTRA="$EXTRA config/redroid-extra.config"
+          EXTRA="$EXTRA config/android-guest.config config/umfb.config config/redroid-extra.config"
           # 故意不并入 config/vt.config：CONFIG_VT 会占走 TTY_MAJOR(4)，
           # UML stdio console 的 tty_register_driver() 随即 -EBUSY，结果是
           # /dev/tty0 变成 dummycon（写进黑洞）、/dev/console 打不开、init 拿不到
@@ -281,8 +279,7 @@ jobs:
           # MODULES/KPROBES/KALLSYMS_ALL/SELINUX，缺一个编的就是另一套环境。
           EXTRA="config/smp.config"
           EXTRA="$EXTRA config/docker.config config/docker-completions.config config/snap-flatpak.config"
-          EXTRA="$EXTRA config/android-guest.config config/umfb.config"
-          EXTRA="$EXTRA config/redroid-extra.config"
+          EXTRA="$EXTRA config/android-guest.config config/umfb.config config/redroid-extra.config"
           # 故意不并入 config/vt.config：CONFIG_VT 会占走 TTY_MAJOR(4)，
           # UML stdio console 的 tty_register_driver() 随即 -EBUSY，结果是
           # /dev/tty0 变成 dummycon（写进黑洞）、/dev/console 打不开、init 拿不到
