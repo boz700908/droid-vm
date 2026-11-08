@@ -36,6 +36,8 @@ import android.widget.TextView;
 
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
+import android.net.Uri;
+import java.io.BufferedInputStream;
 import java.io.FileDescriptor;
 import java.io.BufferedReader;
 import java.io.File;
@@ -91,6 +93,25 @@ public class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private static final int MAX_CHARS = 200000;
+
+    /* ------------------------------------------------------------------
+     * 系统盘（redroid 的 Android 根盘 android.ext4）
+     *
+     * 4 GB 的镜像塞不进 APK，只能落在 filesDir；而 filesDir 是 App 私有
+     * 目录，用户从浏览器下到手机上的文件进不来，于是给两条路：
+     *   1. 直接从站点下载并就地解压（一步到位，推荐）；
+     *   2. 用系统文件选择器挑一个本地 .ext4 或 .ext4.gz 导入。
+     * 两条路都先写 .part 再改名，中途失败不会留下半个镜像让 UML 去挂。
+     * ------------------------------------------------------------------ */
+
+    private static final String DISK_URL =
+            "https://zqrj1.top/dl/e76aa893ab7d07e7/android.ext4.gz";
+    private static final int REQ_DISK = 0x5100;
+
+    private TextView diskLabel;
+    private Button diskDownload;
+    private Button diskPick;
+    private volatile boolean diskBusy;
 
     @Override
     protected void onCreate(Bundle saved) {
@@ -215,6 +236,44 @@ public class MainActivity extends Activity {
         root.addView(probe, new LinearLayout.LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
+        /* --- 系统盘：redroid 的 Android 根盘必须落在 App 私有目录里，
+         *     浏览器下到手机上的文件进不来，所以这里给两条导入路径。 --- */
+        TextView diskTitle = new TextView(this);
+        diskTitle.setText("Android 系统盘");
+        diskTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        diskTitle.setAccessibilityHeading(true);
+        root.addView(diskTitle, new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+
+        diskLabel = new TextView(this);
+        diskLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        diskLabel.setMinHeight(dp(48));
+        diskLabel.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_NONE);
+        root.addView(diskLabel, new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+
+        diskDownload = new Button(this);
+        diskDownload.setText("下载系统盘（约 720 MB，解压后 4 GB）");
+        diskDownload.setContentDescription(
+                "从站点下载 Android 系统盘，下载约 720 兆，解压后占用 4 GB");
+        diskDownload.setMinHeight(dp(48));
+        diskDownload.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { downloadDisk(); }
+        });
+        root.addView(diskDownload, new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+
+        diskPick = new Button(this);
+        diskPick.setText("从手机里选文件导入系统盘");
+        diskPick.setContentDescription(
+                "用文件选择器挑一个系统盘镜像导入，支持 ext4 和压缩过的 ext4.gz");
+        diskPick.setMinHeight(dp(48));
+        diskPick.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { pickDisk(); }
+        });
+        root.addView(diskPick, new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+
         /* --- 内核输出 --- */
         TextView logTitle = new TextView(this);
         logTitle.setText("内核输出");
@@ -300,6 +359,7 @@ public class MainActivity extends Activity {
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
         setContentView(root);
+        refreshDisk();
 
         append("DroidVM -- Linux/UML on aarch64, inside an Android app\n");
         append("uid " + android.os.Process.myUid() + "\n");
@@ -1009,6 +1069,189 @@ public class MainActivity extends Activity {
         if (guest != null) {
             setStatus("正在停止…");
             guest.destroy();
+        }
+    }
+
+    /* ------------------------------------------------------------------
+     * 系统盘：下载与导入
+     *
+     * 下载量按压缩包算（约 720 MB），进度按 10% 一报 —— 每 1% 都改一次
+     * live region，读屏会变成噪音。导入按每 0.1 GB 一报。
+     * ------------------------------------------------------------------ */
+
+    private File diskFile() {
+        return new File(getFilesDir(), "android.ext4");
+    }
+
+    /** 刷新系统盘那一行的文案与按钮可用性；任何线程都能调。 */
+    private void refreshDisk() {
+        final File f = diskFile();
+        final boolean ready = f.isFile() && f.length() > (1L << 20);
+        final boolean idle = !diskBusy;
+        ui.post(new Runnable() {
+            @Override public void run() {
+                String s = ready
+                        ? String.format(Locale.US, "系统盘：已就绪，%.2f GB",
+                                        f.length() / 1073741824.0)
+                        : "系统盘：未就绪（没有 android.ext4，redroid 起不来）";
+                diskLabel.setText(s);
+                diskLabel.setContentDescription(s);
+                diskDownload.setEnabled(idle);
+                diskPick.setEnabled(idle);
+            }
+        });
+    }
+
+    private void downloadDisk() {
+        if (diskBusy)
+            return;
+        diskBusy = true;
+        refreshDisk();
+        setStatus("正在下载系统盘…");
+        new Thread(new Runnable() {
+            @Override public void run() { downloadDiskThread(); }
+        }).start();
+    }
+
+    private void downloadDiskThread() {
+        final File part = new File(getFilesDir(), "android.ext4.part");
+        java.net.HttpURLConnection c = null;
+        InputStream in = null;
+        FileOutputStream out = null;
+        try {
+            c = (java.net.HttpURLConnection) new java.net.URL(DISK_URL).openConnection();
+            c.setConnectTimeout(20000);
+            c.setReadTimeout(60000);
+            c.connect();
+            int code = c.getResponseCode();
+            if (code != 200)
+                throw new IOException("HTTP " + code);
+            long total = c.getContentLength();
+            in = new BufferedInputStream(c.getInputStream(), 1 << 16);
+            in.mark(2);
+            int b0 = in.read();
+            int b1 = in.read();
+            in.reset();
+            if (b0 == 0x1f && b1 == 0x8b)
+                in = new GZIPInputStream(in, 1 << 16);
+            out = new FileOutputStream(part);
+            byte[] buf = new byte[1 << 20];
+            long done = 0;
+            long last = -10;
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                done += n;
+                long pct = total > 0 ? done * 100 / total : done / 10737418L;
+                if (pct - last >= 10) {
+                    last = pct;
+                    setStatus("正在下载系统盘，" + pct + "%");
+                }
+            }
+            out.flush();
+            out.close();
+            out = null;
+            in.close();
+            in = null;
+            File dst = diskFile();
+            if (dst.exists() && !dst.delete())
+                throw new IOException("删不掉旧的 android.ext4");
+            if (!part.renameTo(dst))
+                throw new IOException("改名失败");
+            append("系统盘已下载：" + dst.length() + " 字节\n");
+            setStatus("系统盘已就绪");
+            announce("系统盘下载完成，可以启动");
+        } catch (Exception e) {
+            part.delete();
+            append("系统盘下载失败：" + e + "\n");
+            setStatus("系统盘下载失败");
+        } finally {
+            try { if (out != null) out.close(); } catch (Exception ignored) { }
+            try { if (in != null) in.close(); } catch (Exception ignored) { }
+            if (c != null)
+                c.disconnect();
+            diskBusy = false;
+            refreshDisk();
+        }
+    }
+
+    private void pickDisk() {
+        if (diskBusy)
+            return;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        try {
+            startActivityForResult(i, REQ_DISK);
+        } catch (Exception e) {
+            append("打不开文件选择器：" + e + "\n");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_DISK || res != RESULT_OK || data == null || data.getData() == null)
+            return;
+        final Uri uri = data.getData();
+        diskBusy = true;
+        refreshDisk();
+        setStatus("正在导入系统盘…");
+        new Thread(new Runnable() {
+            @Override public void run() { importDiskThread(uri); }
+        }).start();
+    }
+
+    private void importDiskThread(Uri uri) {
+        final File part = new File(getFilesDir(), "android.ext4.part");
+        InputStream in = null;
+        FileOutputStream out = null;
+        try {
+            in = new BufferedInputStream(
+                    getContentResolver().openInputStream(uri), 1 << 16);
+            in.mark(2);
+            int b0 = in.read();
+            int b1 = in.read();
+            in.reset();
+            if (b0 == 0x1f && b1 == 0x8b)
+                in = new GZIPInputStream(in, 1 << 16);
+            out = new FileOutputStream(part);
+            byte[] buf = new byte[1 << 20];
+            long done = 0;
+            long last = -1;
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                done += n;
+                long step = done / 107374182L;
+                if (step != last) {
+                    last = step;
+                    setStatus(String.format(Locale.US, "正在导入系统盘，%.1f GB",
+                                            done / 1073741824.0));
+                }
+            }
+            out.flush();
+            out.close();
+            out = null;
+            in.close();
+            in = null;
+            File dst = diskFile();
+            if (dst.exists() && !dst.delete())
+                throw new IOException("删不掉旧的 android.ext4");
+            if (!part.renameTo(dst))
+                throw new IOException("改名失败");
+            append("系统盘已导入：" + dst.length() + " 字节\n");
+            setStatus("系统盘已就绪");
+            announce("系统盘导入完成，可以启动");
+        } catch (Exception e) {
+            part.delete();
+            append("系统盘导入失败：" + e + "\n");
+            setStatus("系统盘导入失败");
+        } finally {
+            try { if (out != null) out.close(); } catch (Exception ignored) { }
+            try { if (in != null) in.close(); } catch (Exception ignored) { }
+            diskBusy = false;
+            refreshDisk();
         }
     }
 
