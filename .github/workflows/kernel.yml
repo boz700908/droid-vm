@@ -409,8 +409,9 @@ jobs:
           cp "$C" artifacts/kernel-config.txt
 
       - name: Alpine 根盘
-        run: KOUT=$PWD/artifacts INIT_BIN=$PWD/artifacts/droidvm-init \
-             bash rootfs/mkrootfs-alpine.sh
+        run: |
+          KOUT=$PWD/artifacts INIT_BIN=$PWD/artifacts/droidvm-init \
+            bash rootfs/mkrootfs-alpine.sh
 
       - name: 失败时上传构建日志
         if: failure()
