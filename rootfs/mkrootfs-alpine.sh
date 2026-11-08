@@ -120,6 +120,12 @@ exec unshare --mount --pid --fork --propagation private /bin/sh -c '
   # echo 会把多个词用一个空格连成一行，正好是内核命令行要的格式
   echo '"$ARGS"' > /tmp/redroid-cmdline
   mount --bind /tmp/redroid-cmdline '"$MNT"'/proc/cmdline
+  # 开着 CONFIG_BOOT_CONFIG 的内核里，init 先读 /proc/bootconfig，空了才回落 cmdline，
+  # 所以两份都给：bootconfig 一行一个键，正好由空格换行得到。
+  if [ -e '"$MNT"'/proc/bootconfig ]; then
+    echo '"$ARGS"' | tr " " "\n" > /tmp/redroid-bootconfig
+    mount --bind /tmp/redroid-bootconfig '"$MNT"'/proc/bootconfig
+  fi
   exec chroot '"$MNT"' /init '"$ARGS"'
 '
 REDROIDUP
