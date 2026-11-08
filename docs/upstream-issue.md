@@ -73,8 +73,8 @@ followed by `BRK64_OPCODE_KPROBES_SS`), so no hardware single-step is required.
 `register_kprobe()` / `register_kretprobe()` work, which is what LKMs use; I did not fake
 the symbol just to light up the config.
 
-**For out-of-tree modules** (this cost me a week of CI round-trips; three gaps only appear
-under `ARCH=um`, which is why no module author has hit them):
+**For out-of-tree modules** (this cost me a week of CI round-trips; none of it shows up in
+an in-tree build):
 
 1. `-I$(srctree)/arch/um/include/shared` is passed before a module's own `-I`, and that
    directory contains a kernel `arch.h` guarded by `__ARCH_H__`. Any module with a header
@@ -96,6 +96,17 @@ under `ARCH=um`, which is why no module author has hit them):
    Android side, so they are **not** in the attached patch — mentioning them only so the
    next person does not spend a week on it. If you would rather have `path_umount`
    exported here, say so and I will send that as a separate one-liner.
+5. The bionic port makes `arch/arm64/um/asm/string.h` define `__HAVE_ARCH_MEMCPY`,
+   `__HAVE_ARCH_STRCMP` and ten of their friends under `__ANDROID__`, so `lib/string.c`
+   skips those functions and `vmlinux` takes them from `libc.a`. That is correct for the
+   binary — it is a userspace process — and invisible to an in-tree build. An out-of-tree
+   module has no libc, so modpost reports `memcpy`, `memset`, `strcmp`, `strlen`,
+   `memcpy` … undefined and the module cannot load. **This one is in the attached patch**:
+   `arch/arm64/um/kernel-strings.c` defines weak fallbacks and exports them. Weak, because
+   when `libc.a` does pull its own copy into the link the strong definition wins and both
+   kernel and modules call libc, which is what the header intends; when it does not, the
+   fallbacks are used. If you would rather have `lib/string.c` compile normally and only
+   the libc copy lose, that also works and is a smaller diff — tell me which you prefer.
 
 Happy to send the tiny `syscall_fn_t` patch separately if you want it in the tree.
 
@@ -120,7 +131,8 @@ rather have it in `arch/um/drivers`.
 - [ ] 补丁里不能出现 `sukisu`/`ksu`/`kpm` 字样（当前 grep 为 0）。
 - [ ] 「Testing」里写的每一项都必须是真跑过的，没跑过的删掉。已删掉
       `CONFIG_KPROBE_EVENTS=y`（拿不到 `HAVE_REGS_AND_STACK_ACCESS_API`）。
-- [ ] 「For out-of-tree modules」四条是**模块侧**发现，不是补丁内容；发 issue 时
+- [ ] 「For out-of-tree modules」五条：第 1/2/3/5 条是**内核侧**（第 5 条已在补丁内），
+      第 4 条是**模块侧**发现、不在补丁内容；发 issue 时
       确认措辞是「建议」而不是「你们错了」。第 4 条（`path_umount` 导出 /
       `ANDROID_GKI_` 命名空间）明确写明不在补丁里：那是 Android ABI 兼容，
       对应实现是本仓库的 `kernel/patches/um-exports/apply.sh` + `um-ns-import.py`。
