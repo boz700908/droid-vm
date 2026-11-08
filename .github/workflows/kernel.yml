@@ -65,6 +65,12 @@ jobs:
           git clone --depth 1 "$UPSTREAM" ksrc
           git -C ksrc rev-parse HEAD | tee ksrc-sha.txt
 
+      - name: 克隆 SukiSU Ultra（只用到 kernel/ 下的模块源码）
+        run: |
+          # kernelsu.ko 必须对着本内核自己编，管理器那边才能选文件安装/升级。
+          git clone --depth 1 "$SUKISU" sukisu
+          git -C sukisu rev-parse HEAD | tee sukisu-sha.txt
+
       - name: 叠加我们的片段
         run: cp kernel/config/sukisu-lkm.config ksrc/tools/um-arm64/config/
 
@@ -130,6 +136,39 @@ jobs:
           bash "$GITHUB_WORKSPACE/kernel/patches/um-kprobes/apply.sh" "$TREE"
           EXTRA_CONFIG="$EXTRA" bash harness/build-bionic.sh
 
+      - name: 外编 kernelsu.ko 与 kprobe 自测模块
+        env:
+          NDK: /home/runner/android-ndk
+          TREE: ${{ github.workspace }}/ksrc
+          ART: ${{ github.workspace }}/artifacts
+          O: ${{ runner.temp }}/um-gki618-build
+        run: |
+          set -euo pipefail
+          TOOL=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+          # 复用上一步留下的 bionic shim：模块必须和内核用同一个 --target 编，
+          # 否则 vermagic 里的编译器/ABI 细节对不上。
+          test -x "$O/.bionic-shim/clang" || { echo "找不到 $O/.bionic-shim/clang"; exit 1; }
+          export PATH="$O/.bionic-shim:$TOOL:/usr/bin:$PATH"
+          # CONFIG_KSU/CONFIG_KPM 不进内核 .config（内核本身不含 KSU），
+          # 只在编 .ko 时用 make 变量传，这也是 LKM 形态升级的基础。
+          make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1 \
+               HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ \
+               M="$GITHUB_WORKSPACE/sukisu/kernel" CONFIG_KSU=m CONFIG_KPM=y \
+               -j"$(nproc)" modules 2>&1 | tail -30
+          make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1 \
+               HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ \
+               M="$GITHUB_WORKSPACE/kernel/testmod" \
+               -j"$(nproc)" modules 2>&1 | tail -20
+          cp "$GITHUB_WORKSPACE/sukisu/kernel/kernelsu.ko" "$ART/kernelsu.ko"
+          cp "$GITHUB_WORKSPACE/kernel/testmod/kprobe-test.ko" "$ART/kprobe-test.ko"
+          llvm-strip -d "$ART/kernelsu.ko" "$ART/kprobe-test.ko" || true
+          for f in "$ART/kernelsu.ko" "$ART/kprobe-test.ko"; do
+            echo "--- $f"
+            ls -lh "$f"
+            "$TOOL/llvm-readelf" -h "$f" | grep -E "Machine|Type"
+            "$TOOL/llvm-nm" --undefined-only "$f" | grep -E "kprobe|kretprobe|register_kprobe" || true
+          done
+
       - name: 核对关键 CONFIG
         run: |
           C="${{ runner.temp }}/um-gki618-build/.config"
@@ -137,7 +176,7 @@ jobs:
           echo "===== 关键项实际取值 ====="
           for k in SMP NR_CPUS MODULES MODULE_UNLOAD KALLSYMS KALLSYMS_ALL KPROBES KRETPROBES EXECMEM \
                    EXT4_FS OVERLAY_FS FANOTIFY SECURITY SECURITYFS AUDIT SECURITY_SELINUX \
-                   ANDROID_BINDERFS ANDROID_BINDER_IPC ANDROID_BINDER_DEVICES MODVERSIONS MODULE_SIG_FORCE DEBUG_INFO_BTF \
+                   ANDROID_BINDERFS ANDROID_BINDER_IPC ANDROID_BINDER_DEVICES MODVERSIONS MODULE_SIG_FORCE DEBUG_INFO DEBUG_INFO_BTF \
                    TRACING EVENT_TRACING FTRACE_SYSCALLS KPROBE_EVENTS \
                    EROFS_FS SQUASHFS FUSE_FS ZRAM PSI MEMCG BLK_CGROUP CGROUP_DEVICE CGROUP_PIDS CPUSETS \
                    VETH BRIDGE NF_TABLES NET_CLS_ACT NET_SCH_HTB BLK_DEV_THROTTLING CFS_BANDWIDTH \
@@ -165,7 +204,9 @@ jobs:
             artifacts/linux-bionic*
             artifacts/stub_exe*
             artifacts/kernelsu.ko
+            artifacts/kprobe-test.ko
             artifacts/alpine.ext4
             artifacts/run.sh
             artifacts/kernel-config.txt
             ksrc-sha.txt
+            sukisu-sha.txt
