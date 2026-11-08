@@ -89,8 +89,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang llvm lld libelf-dev zlib1g-dev flex bison make file cpio \
-            gcc-aarch64-linux-gnu \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross linux-libc-dev-arm64-cross \
             e2fsprogs unzip curl
+
+      - name: 编译 guest init（PID 1）
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          # 交叉工具链没有装目标 libc 头时会去读宿主的 /usr/include，报
+          # bits/wordsize.h 找不到。这里先把搜索路径打出来，方便下次一眼定位。
+          aarch64-linux-gnu-gcc -static -O2 -Wall -o artifacts/droidvm-init \
+            rootfs/droidvm-init.c || {
+              echo "--- 交叉工具链诊断 ---"
+              aarch64-linux-gnu-gcc -v 2>&1 | tail -5
+              ls /usr/aarch64-linux-gnu/include 2>/dev/null | head -5 || echo "没有 /usr/aarch64-linux-gnu/include"
+              dpkg -l | grep -E "arm64-cross" | awk '{print $2}'
+              exit 1
+            }
+          file artifacts/droidvm-init
+          ls -l artifacts/droidvm-init
 
       - name: 缓存 NDK
         id: ndk-cache
@@ -390,14 +407,6 @@ jobs:
             grep -E "^CONFIG_${k}=" "$C" || echo "(未设置)"
           done
           cp "$C" artifacts/kernel-config.txt
-
-      - name: 编译 guest init（PID 1）
-        run: |
-          set -euo pipefail
-          aarch64-linux-gnu-gcc -static -O2 -Wall -o artifacts/droidvm-init \
-            rootfs/droidvm-init.c
-          file artifacts/droidvm-init
-          ls -l artifacts/droidvm-init
 
       - name: Alpine 根盘
         run: KOUT=$PWD/artifacts INIT_BIN=$PWD/artifacts/droidvm-init \
