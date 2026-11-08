@@ -158,8 +158,7 @@ fi
 
 # 把签名证书指纹打进日志：相邻两次构建的这一行相同，才说明「覆盖安装」
 # 还能保住 App 的数据目录。
-"$BT/apksigner" verify --print-certs "$APK" 2>/dev/null \
-	| sed -n 's/^Signer #1 certificate SHA-256 digest: /签名证书 SHA-256: /p'
+{ "$BT/apksigner" verify --print-certs "$APK" 2>&1 || true; } | grep -i "SHA-256" || true
 
 echo
 echo "APK: $APK  ($(du -h "$APK" | cut -f1))"
