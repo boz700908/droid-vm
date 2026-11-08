@@ -10,9 +10,47 @@ on:
         description: 只验证宿主 App 能编过（不下载内核产物，出的包不可运行）
         type: boolean
         default: false
+  # 内核 workflow 每晚出包；这里晚一小时跑，只有「最新成功的内核产物」比上次
+  # 打进 APK 的那份更新时才重打。
+  schedule:
+    - cron: '37 20 * * *'
 
 jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      needed: ${{ steps.cmp.outputs.needed }}
+    steps:
+      - name: 内核产物是否比上次打包的新
+        id: cmp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          needed=true
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            last=$(gh run list -R "$GITHUB_REPOSITORY" --workflow=kernel.yml \
+                     --status=success --limit=1 --json databaseId --jq '.[0].databaseId // ""')
+            have=""
+            prev=$(gh run list -R "$GITHUB_REPOSITORY" --workflow=apk.yml \
+                     --status=success --limit=1 --json databaseId --jq '.[0].databaseId // ""')
+            if [ -n "$prev" ]; then
+              gh run download -R "$GITHUB_REPOSITORY" "$prev" -n apk-stamp -D stamp \
+                >/dev/null 2>&1 || true
+              [ -f stamp/kernel-run.txt ] && have=$(cat stamp/kernel-run.txt)
+            fi
+            echo "内核最新 $last，上次打进 APK 的 $have"
+            if [ -n "$last" ] && [ "$last" = "$have" ]; then
+              needed=false
+              echo "APK 已是最新内核，跳过"
+            fi
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+
   apk:
+    needs: check
+    if: needs.check.outputs.needed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -27,7 +65,10 @@ jobs:
           id=$(gh run list --workflow=kernel.yml --status=success --limit=1 \
                  --json databaseId --jq '.[0].databaseId')
           echo "kernel run: $id"
-          gh run download "$id" -n um-gki618-4k -D artifacts
+          # 产物压缩包的顶层本身就有 artifacts/ 目录，下到当前目录才会得到
+          # ./artifacts/linux-bionic（下到 artifacts 会变成 artifacts/artifacts/...）
+          gh run download "$id" -n um-gki618-4k -D .
+          echo "$id" > kernel-run.txt
           ls -l artifacts | head -20
 
       - name: 打包 APK（不用 Gradle）
@@ -50,3 +91,10 @@ jobs:
             app/build/javac.log
             app/build/aapt2.log
           if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: apk-stamp
+          path: kernel-run.txt
+          if-no-files-found: ignore

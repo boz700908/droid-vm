@@ -22,6 +22,10 @@ on:
         description: "快路：只 prepared 内核头 + 外编 .ko（约 8 分钟，不出 linux-bionic）"
         type: boolean
         default: false
+  # 每天 19:23 UTC（北京 03:23）看一眼上游内核和 SukiSU 有没有新提交；
+  # 三方（上游 / 模块 / 本仓库）的 SHA 与上次成功构建完全一致就直接跳过。
+  schedule:
+    - cron: '23 19 * * *'
 
 env:
   NDK_VER: r28c
@@ -29,7 +33,49 @@ env:
   SUKISU: https://github.com/SukiSU-Ultra/SukiSU-Ultra
 
 jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      needed: ${{ steps.cmp.outputs.needed }}
+    steps:
+      - name: 上游/模块/本仓库 是否有变化
+        id: cmp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          needed=true
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            up=$(git ls-remote "$UPSTREAM" HEAD | cut -f1)
+            su=$(git ls-remote "$SUKISU" HEAD | cut -f1)
+            me="${{ github.sha }}"
+            prev=$(gh run list -R "$GITHUB_REPOSITORY" --workflow=kernel.yml \
+                     --status=success --limit=1 --json databaseId --jq '.[0].databaseId // ""')
+            p_up=""; p_su=""; p_me=""
+            if [ -n "$prev" ]; then
+              gh run download -R "$GITHUB_REPOSITORY" "$prev" -n build-stamps -D stamps \
+                >/dev/null 2>&1 || true
+              [ -f stamps/ksrc-sha.txt ]   && p_up=$(cat stamps/ksrc-sha.txt)
+              [ -f stamps/sukisu-sha.txt ] && p_su=$(cat stamps/sukisu-sha.txt)
+              [ -f stamps/repo-sha.txt ]   && p_me=$(cat stamps/repo-sha.txt)
+            fi
+            echo "上游 $up (上次 $p_up)"
+            echo "模块 $su (上次 $p_su)"
+            echo "本仓 $me (上次 $p_me)"
+            if [ -n "$p_up" ] && [ "$up" = "$p_up" ] \
+               && [ "$su" = "$p_su" ] && [ "$me" = "$p_me" ]; then
+              needed=false
+              echo "三方都没变，跳过"
+            fi
+          else
+            echo "手动触发，直接构建"
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: check
+    if: needs.check.outputs.needed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
@@ -353,6 +399,18 @@ jobs:
         with:
           name: build-log
           path: artifacts/*.log
+          if-no-files-found: ignore
+
+      - name: 记录本仓库 SHA
+        run: echo "$GITHUB_SHA" > repo-sha.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-stamps
+          path: |
+            ksrc-sha.txt
+            sukisu-sha.txt
+            repo-sha.txt
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
