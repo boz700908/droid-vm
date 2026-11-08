@@ -829,7 +829,10 @@ public class MainActivity extends Activity {
                 cmd.add("root=/dev/ubda");
                 cmd.add("rw");
                 /* 我们的根盘是 Alpine，没有 umarm-init，直接给 sh。 */
-                cmd.add("init=/bin/sh");
+                // 不能是 /bin/sh：内核把 /dev/console 复制给 init 失败时 sh 会
+                // 立刻读到 EOF 退出，PID 1 退出就是 panic。droidvm-init 自己
+                // 开控制台并 respawn 一个交互 shell。
+                cmd.add("init=/sbin/droidvm-init");
             } else {
                 cmd.add("initrd=" + initrd.getAbsolutePath());
                 cmd.add("init=/init");
