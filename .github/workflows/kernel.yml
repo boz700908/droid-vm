@@ -66,6 +66,15 @@ jobs:
           git -C ksrc rev-parse HEAD | tee ksrc-sha.txt
 
       - name: 克隆 SukiSU Ultra（只用到 kernel/ 下的模块源码）
+      - name: 给 SukiSU 打 UML 兼容补丁
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/sukisu"
+          python3 "$GITHUB_WORKSPACE/kernel/patches/sukisu-um/ptregs-um.py" kernel
+          # 补丁跑完自检：字段式寄存器访问必须一个不剩（UML 的 regs 不是数组）。
+          if grep -rn -- "->__PT_" --include='*.c' kernel | grep -v '^kernel/include/arch.h'; then
+            echo "还有字段式寄存器访问没改干净"; exit 1
+          fi
         run: |
           # kernelsu.ko 必须对着本内核自己编，管理器那边才能选文件安装/升级。
           git clone --depth 1 "$SUKISU" sukisu
@@ -151,14 +160,28 @@ jobs:
           export PATH="$O/.bionic-shim:$TOOL:/usr/bin:$PATH"
           # CONFIG_KSU/CONFIG_KPM 不进内核 .config（内核本身不含 KSU），
           # 只在编 .ko 时用 make 变量传，这也是 LKM 形态升级的基础。
-          make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1 \
+          # -k 让 make 一次跑完所有源文件：UML 上第一次编 kernelsu.ko 一定会
+          # 撞上多处 arm64 假设，一个一个试要跑很多趟 CI。失败时把 error 去重打出来。
+          if ! make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1 \
                HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ \
                M="$GITHUB_WORKSPACE/sukisu/kernel" CONFIG_KSU=m CONFIG_KPM=y \
-               -j"$(nproc)" modules 2>&1 | tail -30
-          make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1 \
+               -j"$(nproc)" -k modules > "$ART/kernelsu.log" 2>&1; then
+            echo "===== kernelsu.ko 编译失败，去重后的错误 ====="
+            grep -aE "error:|fatal error|Error [0-9]" "$ART/kernelsu.log" \
+              | sed "s|$GITHUB_WORKSPACE/||" | sort -u | head -40
+            exit 1
+          fi
+          tail -3 "$ART/kernelsu.log"
+          if ! make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1 \
                HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ \
                M="$GITHUB_WORKSPACE/kernel/testmod" \
-               -j"$(nproc)" modules 2>&1 | tail -20
+               -j"$(nproc)" -k modules > "$ART/testmod.log" 2>&1; then
+            echo "===== kprobe-test.ko 编译失败 ====="
+            grep -aE "error:|fatal error|Error [0-9]" "$ART/testmod.log" \
+              | sed "s|$GITHUB_WORKSPACE/||" | sort -u | head -20
+            exit 1
+          fi
+          tail -3 "$ART/testmod.log"
           cp "$GITHUB_WORKSPACE/sukisu/kernel/kernelsu.ko" "$ART/kernelsu.ko"
           cp "$GITHUB_WORKSPACE/kernel/testmod/kprobe-test.ko" "$ART/kprobe-test.ko"
           llvm-strip -d "$ART/kernelsu.ko" "$ART/kprobe-test.ko" || true
