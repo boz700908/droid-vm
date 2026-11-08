@@ -35,11 +35,12 @@ static void tst_post(struct kprobe *p, struct pt_regs *regs, unsigned long flags
 		pr_info("kprobe-test: post %s\n", p->symbol_name);
 }
 
+// 6.18 的 kretprobe_instance 已经没有 rp 成员（rethook 化），直接打参数名
 static int tst_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
 	n_entry++;
 	if (n_entry <= 3)
-		pr_info("kprobe-test: krprobe entry %s\n", ri->rp->kp.symbol_name);
+		pr_info("kprobe-test: krprobe entry %s\n", probe_sym);
 	return 0;
 }
 
@@ -47,7 +48,7 @@ static int tst_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
 	n_ret++;
 	if (n_ret <= 3)
-		pr_info("kprobe-test: krprobe return %s\n", ri->rp->kp.symbol_name);
+		pr_info("kprobe-test: krprobe return %s\n", probe_sym);
 	return 0;
 }
 
