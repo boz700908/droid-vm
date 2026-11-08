@@ -39,13 +39,6 @@ BINARIES=(
 	"$A/umusb:libumusb.so"
 )
 
-# 根盘：优先用预压缩的，其次把 alpine.ext4 现压一份。
-if [ -z "${ROOTFS_GZ:-}" ] && [ -n "${ROOTFS:-}" ] && [ -f "${ROOTFS}" ]; then
-	ROOTFS_GZ=$OUT/rootfs.ext4.gz
-	mkdir -p "$OUT"
-	echo "== gzip $ROOTFS =="
-	gzip -1 -c "$ROOTFS" > "$ROOTFS_GZ"
-fi
 # ROOTFS 可能是空的（verify_only 或本机没准备根盘），而后面无条件引用
 # $ROOTFS_GZ；-u 会在那里直接退出，所以这里给它一个确定的空值。
 ROOTFS_GZ=${ROOTFS_GZ:-}
@@ -59,6 +52,15 @@ command -v javac >/dev/null || { echo "build-apk: no javac" >&2; exit 2; }
 
 rm -rf "$OUT"
 mkdir -p "$OUT/res" "$OUT/classes" "$OUT/lib/arm64-v8a" "$OUT/assets"
+
+# 根盘：优先用预压缩的，其次把 alpine.ext4 现压一份。
+# 这段必须在 `rm -rf "$OUT"` 之后——压到 $OUT 里，之前放在前面会被自己清掉，
+# 于是打包时以为没有根盘，静默打出一个只能靠 initramfs 的包。
+if [ -z "$ROOTFS_GZ" ] && [ -n "${ROOTFS:-}" ] && [ -f "${ROOTFS}" ]; then
+	ROOTFS_GZ=$OUT/rootfs.ext4.gz
+	echo "== gzip $ROOTFS =="
+	gzip -1 -c "$ROOTFS" > "$ROOTFS_GZ"
+fi
 
 # aapt2 编译的是目录树，而 $OUT 每次都被清空，所以签入的 res/ 要拷进去。
 # res/xml/device_filter.xml 是 manifest 里 @xml/device_filter 的落点；少这份
