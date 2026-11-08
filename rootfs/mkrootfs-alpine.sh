@@ -67,6 +67,48 @@ fi
 # 换掉：sysinit 自己挂文件系统，tty0 上 respawn 一个登录 shell。
 # 以后要用服务管理（sshd、redroid 之类），apk add openrc 后把原版那三行
 # openrc sysinit/boot/default 加回来即可。
+# redroid 的拉起脚本。参数不是猜的：全部来自官方文档的 androidboot.* 那一套
+# （见 docs/redroid-notes.md）。ashmem 在 GKI 里已经没有了，所以必须 use_memfd；
+# UML 里没有 GPU，所以 gpu_mode 固定 guest（纯软件渲染）。
+cat > root/sbin/redroid-up <<'REDROIDUP'
+#!/bin/sh
+# /sbin/redroid-up —— 在 guest 里把 redroid（Android 16）拉起来。
+# 用法：redroid-up [块设备]   默认 /dev/ubdb，也就是 App 用 ubd1= 传进来的 android.ext4
+set -eu
+log() { echo "redroid-up: $*" >/dev/kmsg 2>/dev/null || echo "redroid-up: $*"; }
+die() { log "$*"; exit 1; }
+
+IMG=${1:-/dev/ubdb}
+MNT=${REDROID_MNT:-/android}
+
+[ -b "$IMG" ] || die "$IMG 不是块设备：App 侧没有 android.ext4，或内核没挂上 ubd1"
+mkdir -p "$MNT"
+mountpoint -q "$MNT" || mount -t ext4 -o rw "$IMG" "$MNT" || die "挂 $IMG 到 $MNT 失败"
+# Android 要 /dev /proc /sys；宿主这边已经挂好了，绑定进去即可。
+for d in dev proc sys; do
+  [ -d "$MNT/$d" ] || mkdir -p "$MNT/$d"
+  mountpoint -q "$MNT/$d" || mount --bind "/$d" "$MNT/$d" || die "绑定 /$d 失败"
+done
+# overlayfs 那套：base 共享、diff 私有，镜像本体保持只读不变。
+mkdir -p "$MNT/data-base" "$MNT/data-diff"
+
+# 关键：Android 的 init 必须是 PID 1，否则一堆服务会因为「祖先不是 init」失败。
+# docker 里它天然是 PID 1，我们用 unshare 自己造一个 pid 命名空间。
+exec unshare --pid --fork --mount-proc="$MNT/proc" chroot "$MNT" /init \
+  qemu=1 \
+  androidboot.hardware=redroid \
+  androidboot.use_memfd=1 \
+  androidboot.redroid_gpu_mode=guest \
+  androidboot.redroid_width="${REDROID_W:-1080}" \
+  androidboot.redroid_height="${REDROID_H:-2400}" \
+  androidboot.redroid_dpi="${REDROID_DPI:-420}" \
+  androidboot.redroid_fps="${REDROID_FPS:-30}" \
+  androidboot.use_redroid_overlayfs=1 \
+  androidboot.selinux=permissive \
+  ro.secure=0 ro.adb.secure=0
+REDROIDUP
+chmod 755 root/sbin/redroid-up
+
 cat > root/etc/inittab <<'INITTAB'
 # /etc/inittab —— droidvm guest
 ::sysinit:/bin/mount -t proc proc /proc
