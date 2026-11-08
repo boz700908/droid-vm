@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # M0 用的 Alpine ext4 根盘（UML ubd0 直接挂）
 set -euo pipefail
+# 这个脚本下面会 cd 进 work/，所以源码目录必须现在（还在仓库根）就算成
+# 绝对路径；之后再 dirname "$0" 只会指向 work/rootfs。
+SRC=$(cd "$(dirname "$0")" && pwd)
 OUT=${KOUT:-$PWD/artifacts}
 SIZE=${SIZE:-1024M}
 VER=${ALPINE_VER:-3.20}
@@ -69,10 +72,10 @@ fi
 # openrc sysinit/boot/default 加回来即可。
 # 隧道对端（Python，镜像里本来就有 python3）。装进 /usr/local/bin，
 # 由 inittab 在共享目录挂上之后拉起来；挂不上就什么都不做。
-SRC=$(cd "$(dirname "$0")" && pwd)
+[ -f "$SRC/guest-agent.py" ] || {
+  echo "mkrootfs: 找不到 $SRC/guest-agent.py" >&2; exit 1; }
 mkdir -p root/usr/local/bin
-cp "$SRC/guest-agent.py" root/usr/local/bin/guest-agent.py
-chmod 755 root/usr/local/bin/guest-agent.py
+install -m 0755 "$SRC/guest-agent.py" root/usr/local/bin/guest-agent.py
 
 # redroid 的拉起脚本。参数不是猜的：全部来自官方文档的 androidboot.* 那一套
 # （见 docs/redroid-notes.md）。ashmem 在 GKI 里已经没有了，所以必须 use_memfd；
