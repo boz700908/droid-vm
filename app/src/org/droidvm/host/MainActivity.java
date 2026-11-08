@@ -423,8 +423,31 @@ public class MainActivity extends Activity {
      */
     private File unpackAsset(String asset, String outName) throws IOException {
         File out = new File(getFilesDir(), outName);
-        if (out.exists() && out.length() > 0)
+        /* 装了新版本就要重解一遍：根盘的改动（比如 inittab 里 hostfs 的挂载
+         * 写法）只随 APK 走，而「文件在就跳过」会让手机一直跑旧镜像，改一百
+         * 遍都没用。版本戳用包的 lastUpdateTime；根盘只放系统内容，用户数据
+         * 在另一块盘 android.ext4（ubd1）里，重解碰不到它。 */
+        long stamp = 0;
+        try {
+            stamp = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0).lastUpdateTime;
+        } catch (Exception e) {
+            /* 拿不到戳就退回老行为：有文件就用文件。 */
+        }
+        File mark = new File(getFilesDir(), outName + ".stamp");
+        String have = "";
+        try {
+            if (mark.exists())
+                have = new String(java.nio.file.Files.readAllBytes(mark.toPath()),
+                        "UTF-8").trim();
+        } catch (Exception e) {
+            have = "";
+        }
+        if (out.exists() && out.length() > 0
+                && (stamp == 0 || have.equals(Long.toString(stamp))))
             return out;
+        if (out.exists())
+            append("根盘随新版本重建（" + outName + "）\n");
 
         append("unpacking " + asset + " ...\n");
         InputStream in = getAssets().open(asset);
@@ -441,6 +464,12 @@ public class MainActivity extends Activity {
         fos.close();
         in.close();
         append("unpacked " + (total >> 20) + " MB\n");
+        try {
+            java.nio.file.Files.write(mark.toPath(),
+                    Long.toString(stamp).getBytes("UTF-8"));
+        } catch (Exception e) {
+            /* 写不上就下次再解一遍，不影响启动。 */
+        }
         return out;
     }
 
