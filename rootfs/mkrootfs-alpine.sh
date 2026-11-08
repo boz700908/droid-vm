@@ -23,6 +23,39 @@ if [ -n "${INIT_BIN:-}" ] && [ -f "${INIT_BIN}" ]; then
 else
 	echo "mkrootfs: 警告：没有 droidvm-init（INIT_BIN 未给），根盘只能退回 init=/bin/sh" >&2
 fi
+# minirootfs 只带 apk 和 busybox（520 个文件），做 redroid 那步要的
+# unshare/nsenter、adb、python3 都没有。这里用静态 apk 直接往 aarch64 根盘里
+# 解包：x86 的 runner 上也能跑，因为 --no-scripts 跳过了安装脚本，不需要
+# binfmt/qemu。包名与用途：
+#   util-linux(-misc)  unshare/nsenter/setsid/findmnt/lsns（redroid 启动器靠它）
+#   android-tools      adb 客户端，连 guest 内 redroid 的 adbd
+#   python3            拆镜像、算布局、写启动脚本
+#   curl strace iproute2
+#   gcompat            glibc 兜底，万一要跑官方预编译二进制
+# 故意不装 openrc：M0/M1 用不到服务管理，需要时再加，并把 inittab 里的
+# openrc sysinit/boot/default 三行恢复。
+GUEST_PKGS=${GUEST_PKGS:-util-linux util-linux-misc android-tools python3 curl strace iproute2 gcompat}
+if [ -n "$GUEST_PKGS" ]; then
+  mkdir -p apkstatic
+  if [ ! -x apkstatic/sbin/apk.static ]; then
+    aname=$(curl -s "https://dl-cdn.alpinelinux.org/alpine/v${VER}/main/x86_64/" \
+      | grep -o 'apk-tools-static-[0-9][0-9.]*-r[0-9]*\.apk' | head -1)
+    [ -n "$aname" ] || { echo "mkrootfs: 找不到 apk-tools-static" >&2; exit 1; }
+    curl -sSLo apkstatic/apk.apk "https://dl-cdn.alpinelinux.org/alpine/v${VER}/main/x86_64/$aname"
+    tar xzf apkstatic/apk.apk -C apkstatic
+  fi
+  apkstatic/sbin/apk.static \
+    --root "$PWD/root" --arch aarch64 --no-scripts --keys-dir "$PWD/root/etc/apk/keys" \
+    --repository "https://dl-cdn.alpinelinux.org/alpine/v${VER}/main" \
+    --repository "https://dl-cdn.alpinelinux.org/alpine/v${VER}/community" \
+    -U add $GUEST_PKGS
+  # 缺包要当场失败：根盘静默少个 unshare，问题会拖到手机上才炸。
+  for f in unshare nsenter adb python3 curl; do
+    find root -maxdepth 3 -name "$f" | grep -q . || {
+      echo "mkrootfs: 补包后仍缺 $f" >&2; exit 1; }
+  done
+fi
+
 # 标准 init：Alpine 的 /sbin/init 就是 busybox init，它照 /etc/inittab 干活。
 # minirootfs 自带的那份会调 /sbin/openrc（这个包里没有 openrc），而且只给
 # tty1..tty6 挂 getty —— 我们的交互通道是 tty0，也就是 UML console，所以整份
