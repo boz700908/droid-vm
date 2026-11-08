@@ -134,7 +134,7 @@ cat > root/etc/inittab <<'INITTAB'
 # 这里用 hostfs 挂到 /mnt/host —— 两边看到同一份文件，隧道、文件注入都靠它。
 # 没传就跳过，不报错：老版本的 App 不会带这个参数。
 ::sysinit:/bin/mkdir -p /mnt/host
-::sysinit:/bin/sh -c 'S=$(sed -n "s/.*droidvm_share=\([^ ]*\).*/\1/p" /proc/cmdline); if [ -n "$S" ]; then mount -t hostfs hostfs /mnt/host -o "$S" && echo "droidvm: 共享目录 $S 已挂到 /mnt/host" >/dev/kmsg || echo "droidvm: 共享目录 $S 挂载失败" >/dev/kmsg; else echo "droidvm: 命令行没有 droidvm_share，跳过共享目录" >/dev/kmsg; fi'
+::sysinit:/bin/sh -c 'S=$(sed -n "s/.*droidvm_share=\([^ ]*\).*/\1/p" /proc/cmdline); if [ -n "$S" ]; then { mount -t hostfs hostfs /mnt/host -o "hostfs=$S" || mount -t hostfs hostfs /mnt/host -o "$S"; } && echo "droidvm: 共享目录 $S 已挂到 /mnt/host" >/dev/kmsg || echo "droidvm: 共享目录 $S 挂载失败" >/dev/kmsg; else echo "droidvm: 命令行没有 droidvm_share，跳过共享目录" >/dev/kmsg; fi'
 ::sysinit:/bin/echo droidvm-init: 标准-init-已接管（busybox-init+inittab）>/dev/kmsg
 # 共享目录一旦挂上就把隧道对端拉起来；没挂就说明这一版 App 没传参数，跳过。
 ::sysinit:/bin/sh -c 'mountpoint -q /mnt/host && { setsid python3 /usr/local/bin/guest-agent.py </dev/null >/dev/null 2>&1 & echo "droidvm: 隧道对端已拉起" >/dev/kmsg; } || true'
