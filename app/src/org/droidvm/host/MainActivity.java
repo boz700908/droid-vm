@@ -83,6 +83,7 @@ public class MainActivity extends Activity {
     private CheckBox seccompBox;
     private CheckBox netBox;
     private CheckBox usbBox;
+    private CheckBox initBox;
     private Button startStop;
 
     private Process guest;
@@ -167,6 +168,21 @@ public class MainActivity extends Activity {
         usbBox.setChecked(false);
         usbBox.setMinHeight(dp(48));
         root.addView(usbBox, new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+
+        /*
+         * 默认走 Alpine 自带的 /sbin/init（busybox init + /etc/inittab），
+         * 也就是标准的 Linux 启动流程。勾上才换成 droidvm-init —— 那是
+         * console tty 还坏着的时候自己写的兜底 PID 1，现在只留作诊断：
+         * 标准 init 读不到 inittab、或者起来就退，勾这个能立刻拿到
+         * 自带自检和 kmsg 直写日志的那一套。
+         */
+        initBox = new CheckBox(this);
+        initBox.setText("诊断 init（droidvm-init，标准 init 起不来时用）");
+        initBox.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        initBox.setChecked(false);
+        initBox.setMinHeight(dp(48));
+        root.addView(initBox, new LinearLayout.LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
         /* --- 启动 / 停止：文案和 contentDescription 都随状态变，
@@ -828,11 +844,18 @@ public class MainActivity extends Activity {
                 cmd.add("ubd0=" + rootfs.getAbsolutePath());
                 cmd.add("root=/dev/ubda");
                 cmd.add("rw");
-                /* 我们的根盘是 Alpine，没有 umarm-init，直接给 sh。 */
-                // 不能是 /bin/sh：内核把 /dev/console 复制给 init 失败时 sh 会
-                // 立刻读到 EOF 退出，PID 1 退出就是 panic。droidvm-init 自己
-                // 开控制台并 respawn 一个交互 shell。
-                cmd.add("init=/sbin/droidvm-init");
+                /*
+                 * 标准启动流程：kernel_init 打开 /dev/console（VT 关掉后这就
+                 * 是 UML console 的 tty），dup 给 0/1/2，再 exec Alpine 的
+                 * /sbin/init —— busybox init 照 /etc/inittab 挂文件系统，然后
+                 * 在 tty0 上 respawn 一个登录 shell。根盘里的 inittab 是
+                 * rootfs/mkrootfs-alpine.sh 写的，专门给 tty0 补了一行。
+                 *
+                 * 不要退回 init=/bin/sh：sh 读到 EOF 就退出，PID 1 退出等于
+                 * panic。真要兜底就勾「诊断 init」，那条路是 droidvm-init。
+                 */
+                cmd.add(initBox.isChecked() ? "init=/sbin/droidvm-init"
+                                            : "init=/sbin/init");
             } else {
                 cmd.add("initrd=" + initrd.getAbsolutePath());
                 cmd.add("init=/init");

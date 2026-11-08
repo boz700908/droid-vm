@@ -23,6 +23,27 @@ if [ -n "${INIT_BIN:-}" ] && [ -f "${INIT_BIN}" ]; then
 else
 	echo "mkrootfs: 警告：没有 droidvm-init（INIT_BIN 未给），根盘只能退回 init=/bin/sh" >&2
 fi
+# 标准 init：Alpine 的 /sbin/init 就是 busybox init，它照 /etc/inittab 干活。
+# minirootfs 自带的那份会调 /sbin/openrc（这个包里没有 openrc），而且只给
+# tty1..tty6 挂 getty —— 我们的交互通道是 tty0，也就是 UML console，所以整份
+# 换掉：sysinit 自己挂文件系统，tty0 上 respawn 一个登录 shell。
+# 以后要用服务管理（sshd、redroid 之类），apk add openrc 后把原版那三行
+# openrc sysinit/boot/default 加回来即可。
+cat > root/etc/inittab <<'INITTAB'
+# /etc/inittab —— droidvm guest
+::sysinit:/bin/mount -t proc proc /proc
+::sysinit:/bin/mount -t sysfs sysfs /sys
+::sysinit:/bin/mount -t devpts devpts /dev/pts
+::sysinit:/bin/mount -t tmpfs tmpfs /tmp
+::sysinit:/bin/mount -t tmpfs tmpfs /run
+::sysinit:/bin/hostname droidvm
+::sysinit:/bin/echo droidvm-init: 标准-init-已接管（busybox-init+inittab）>/dev/kmsg
+# App 不是真终端，不走 getty/login 那套提示；sh -l 会读 /etc/profile 拿到 PATH、PS1。
+tty0::respawn:/bin/sh -l
+::ctrlaltdel:/bin/reboot
+::shutdown:/bin/umount -a -r
+INITTAB
+
 rm -f "$OUT/alpine.ext4"
 mke2fs -q -t ext4 -F -d root -L umroot "$OUT/alpine.ext4" "$SIZE"
 cat > "$OUT/run.sh" <<'RUN'
@@ -30,7 +51,7 @@ cat > "$OUT/run.sh" <<'RUN'
 # 在 Termux 里把 linux-bionic、stub_exe_bionic、alpine.ext4 放同一目录后：sh run.sh
 # seccomp=on 才会走 PTRACE_SYSEMU 快路径并拿到多 vCPU；不支持时改用 seccomp=auto。
 exec ./linux-bionic mem=2048M ubd0=alpine.ext4 root=/dev/ubda rw \
-  init=/sbin/droidvm-init con0=null,fd:1 seccomp=on "$@"
+  init=/sbin/init con0=null,fd:1 seccomp=on "$@"
 RUN
 chmod +x "$OUT/run.sh"
 ls -lh "$OUT"
