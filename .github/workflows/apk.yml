@@ -1,0 +1,45 @@
+name: apk
+
+# 宿主 App 单独出包：它不编译内核，只把最近一次成功的内核产物装进 APK。
+# 手动触发（和 kernel.yml 一样），因为产物要和某一次 kernel run 对上号。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取最近一次成功的内核产物
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          id=$(gh run list --workflow=kernel.yml --status=success --limit=1 \
+                 --json databaseId --jq '.[0].databaseId')
+          echo "kernel run: $id"
+          gh run download "$id" -n um-gki618-4k -D artifacts
+          ls -l artifacts | head -20
+
+      - name: 打包 APK（不用 Gradle）
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          java -version
+          ls "$ANDROID_HOME/build-tools" "$ANDROID_HOME/platforms"
+          ARTIFACTS="$PWD/artifacts" ROOTFS="$PWD/artifacts/alpine.ext4" \
+            bash app/build-apk.sh
+
+      - name: 上传
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: droidvm-apk
+          path: |
+            app/droidvm.apk
+            app/build/javac.log
+            app/build/aapt2.log
+          if-no-files-found: warn

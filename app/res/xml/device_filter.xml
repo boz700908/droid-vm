@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只有这个 VID/PID 会被 USB_DEVICE_ATTACHED 广播唤起本 App。
+  数值是十进制，和 MainActivity.java 里的 USB_VENDOR / USB_PRODUCT
+  （0x2357 / 0x011f）必须一起改。
+-->
+<resources>
+    <usb-device vendor-id="9047" product-id="287" />
+</resources>
