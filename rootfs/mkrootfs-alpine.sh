@@ -36,7 +36,7 @@ fi
 #   gcompat            glibc 兜底，万一要跑官方预编译二进制
 # 故意不装 openrc：M0/M1 用不到服务管理，需要时再加，并把 inittab 里的
 # openrc sysinit/boot/default 三行恢复。
-GUEST_PKGS=${GUEST_PKGS:-util-linux util-linux-misc android-tools curl strace iproute2 gcompat}
+GUEST_PKGS=${GUEST_PKGS:-util-linux util-linux-misc android-tools curl}
 if [ -n "$GUEST_PKGS" ]; then
   # 仓库版本跟着根盘走，免得 ALPINE_VER 改了而这里还用老版本号。
   VER=$(cut -d. -f1,2 root/etc/alpine-release)
