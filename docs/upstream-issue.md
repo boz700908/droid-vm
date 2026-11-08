@@ -89,6 +89,13 @@ under `ARCH=um`, which is why no module author has hit them):
    `asm/arch_timer.h` (real `ALTERNATIVE`, `isb`, `mrs cntpct_el0`) and `vdso/processor.h`
    (`cpu_relax` redefinition). Anything touching the vdso page or clocksource needs a
    `CONFIG_UML` gate there; there is no vdso page to rewrite in UML anyway.
+4. Android's GKI tree exports a few VFS internals under the
+   `ANDROID_GKI_VFS_internal_...` namespace and also exports `path_umount`, which has no
+   `EXPORT_SYMBOL` upstream. Modules ported from Android therefore fail modpost twice
+   (missing namespace import, missing export). Both are one-line fixes on the module or
+   Android side, so they are **not** in the attached patch — mentioning them only so the
+   next person does not spend a week on it. If you would rather have `path_umount`
+   exported here, say so and I will send that as a separate one-liner.
 
 Happy to send the tiny `syscall_fn_t` patch separately if you want it in the tree.
 
@@ -113,5 +120,10 @@ rather have it in `arch/um/drivers`.
 - [ ] 补丁里不能出现 `sukisu`/`ksu`/`kpm` 字样（当前 grep 为 0）。
 - [ ] 「Testing」里写的每一项都必须是真跑过的，没跑过的删掉。已删掉
       `CONFIG_KPROBE_EVENTS=y`（拿不到 `HAVE_REGS_AND_STACK_ACCESS_API`）。
-- [ ] 「For out-of-tree modules」三条是**模块侧**发现，不是补丁内容；发 issue 时
-      确认措辞是「建议」而不是「你们错了」。
+- [ ] 「For out-of-tree modules」四条是**模块侧**发现，不是补丁内容；发 issue 时
+      确认措辞是「建议」而不是「你们错了」。第 4 条（`path_umount` 导出 /
+      `ANDROID_GKI_` 命名空间）明确写明不在补丁里：那是 Android ABI 兼容，
+      对应实现是本仓库的 `kernel/patches/um-exports/apply.sh` + `um-ns-import.py`。
+- [ ] 附加一句能力边界：`ksu_patch_text` / `ksu_syscall_table` / syscall hook 在 UML 上
+      **明确不支持**（诚实返回 `-EOPNOTSUPP` / `-ENOSYS`），可用的是模块加载、
+      kprobe、KPM/SUSFS。别让上游误以为 syscall hook 能用。

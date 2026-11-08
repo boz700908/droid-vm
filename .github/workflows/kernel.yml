@@ -91,6 +91,10 @@ jobs:
           # 内核侧：path_umount 在 mainline 没有导出，而 SukiSU 直接调用它。
           # 注意本 step 的 cwd 是 sukisu/，内核树必须用绝对路径。
           bash "$GITHUB_WORKSPACE/kernel/patches/um-exports/apply.sh" "$GITHUB_WORKSPACE/ksrc"
+          # bionic 构建让 libc 提供 memcpy/strcmp 等 -> 内核不导出 -> 外部模块全 import 不到
+          bash "$GITHUB_WORKSPACE/kernel/patches/um-strings/apply.sh" "$GITHUB_WORKSPACE/ksrc"
+          # GKI 有导出、这棵树没导出的那批符号
+          bash "$GITHUB_WORKSPACE/kernel/patches/um-gki-exports/apply.sh" "$GITHUB_WORKSPACE/ksrc"
           # 补丁跑完自检：字段式寄存器访问必须一个不剩（UML 的 regs 不是数组）。
           if grep -rn -- "->__PT_" --include='*.c' kernel | grep -v '^kernel/include/ksu-arch.h'; then
             echo "还有字段式寄存器访问没改干净"; exit 1
@@ -258,6 +262,7 @@ jobs:
                HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ \
                M="$GITHUB_WORKSPACE/sukisu/kernel" CONFIG_KSU=m CONFIG_KPM=y  $MPOST \
                -j"$(nproc)" -k modules > "$ART/kernelsu.log" 2>&1; then
+            set +e
             echo "===== kernelsu.ko 编译失败，去重后的错误 ====="
             grep -aE "error:|fatal error|Error [0-9]" "$ART/kernelsu.log" \
               | sed "s|$GITHUB_WORKSPACE/||" | sort -u | head -40
@@ -268,7 +273,7 @@ jobs:
                    HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ \
                    M="$GITHUB_WORKSPACE/sukisu/kernel" CONFIG_KSU=m CONFIG_KPM=y \
                    V=1 -k "${bad%.c}.o" 2>&1 | grep -a 'clang' | head -1 \
-                | tr ' ' '\n' | grep -E '^-I|^-D|^-include' | head -40
+                | tr ' ' '\n' | grep -E '^-I|^-D|^-include' | head -40 || true
             fi
             # modpost 一次只打 10 条 undefined 就封嘴，剩下的看不见。自己算一遍：
             # 模块全部 undefined − 内核 Module.symvers 导出 = 要补的完整清单；
@@ -279,6 +284,11 @@ jobs:
             awk '{print $2}' "$O/Module.symvers" 2>/dev/null | sed 's/@.*//' | sort -u > /tmp/exp.txt || true
             comm -23 /tmp/undef.txt /tmp/exp.txt | tr '\n' ' ' | cut -c1-3000; echo
             echo "内核导出条数: $(wc -l < /tmp/exp.txt)"
+            echo "===== Module.symvers 现状 ====="
+            ls -l "$O/Module.symvers" "$O/vmlinux.symvers" "$O/vmlinux.o" 2>&1 | sed 's|^|  |'
+            echo "  symvers 行数: $(wc -l < "$O/Module.symvers" 2>/dev/null || echo 0)"
+            grep -aE "^(strcmp|strlen|memcpy|memset|ns_get_path|mntns_operations|strncpy_from_user_nofault|kallsyms_lookup_size_offset|path_umount)\b" \
+              "$O/Module.symvers" 2>/dev/null | head -20 || echo "  关心的符号一个都不在 symvers 里"
             grep -E '^CONFIG_MODULES=|^CONFIG_TRIM_UNUSED_KSYMS=|^# CONFIG_TRIM_UNUSED_KSYMS' \
               "$O/.config" || true
             exit 1
