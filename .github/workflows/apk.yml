@@ -5,6 +5,11 @@ name: apk
 
 on:
   workflow_dispatch:
+    inputs:
+      verify_only:
+        description: 只验证宿主 App 能编过（不下载内核产物，出的包不可运行）
+        type: boolean
+        default: false
 
 jobs:
   apk:
@@ -14,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: 取最近一次成功的内核产物
+        if: ${{ !inputs.verify_only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -31,13 +37,14 @@ jobs:
           java -version
           ls "$ANDROID_HOME/build-tools" "$ANDROID_HOME/platforms"
           ARTIFACTS="$PWD/artifacts" ROOTFS="$PWD/artifacts/alpine.ext4" \
+            ALLOW_NO_NATIVE="${{ inputs.verify_only && '1' || '0' }}" \
             bash app/build-apk.sh
 
       - name: 上传
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: droidvm-apk
+          name: droidvm-apk${{ inputs.verify_only && '-verify-only' || '' }}
           path: |
             app/droidvm.apk
             app/build/javac.log

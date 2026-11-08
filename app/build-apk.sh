@@ -74,7 +74,16 @@ for b in "${BINARIES[@]}"; do
 		echo "   WARNING: $src missing, $dst will be absent"
 	fi
 done
-[ -f "$OUT/lib/arm64-v8a/libuml.so" ] || { echo "build-apk: 没有内核二进制，打出来的 APK 跑不起来" >&2; exit 2; }
+# 没有内核二进制时默认直接失败（别发出一份跑不起来的 APK）。
+# ALLOW_NO_NATIVE=1 时只告警，用于「没有内核产物也要验证 Java 侧能编过」的场合。
+if [ ! -f "$OUT/lib/arm64-v8a/libuml.so" ]; then
+	if [ "${ALLOW_NO_NATIVE:-0}" = "1" ]; then
+		echo "   WARNING: 没有内核二进制（ALLOW_NO_NATIVE=1）→ 只做编译验证，包不可运行" >&2
+	else
+		echo "build-apk: 没有内核二进制，打出来的 APK 跑不起来" >&2
+		exit 2
+	fi
+fi
 
 echo "== staging assets =="
 if [ -n "$ROOTFS_GZ" ] && [ -f "$ROOTFS_GZ" ]; then
