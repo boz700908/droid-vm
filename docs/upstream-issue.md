@@ -1,7 +1,7 @@
 # 上游 issue 草稿（lakitu12/linux-um-arm64-gki）
 
 > 待 CI 全绿后再发。附的是仓库里的单补丁
-> `kernel/patches/0001-um-arm64-kprobes-and-module-loading.patch`（21 文件）。
+> `kernel/patches/0001-um-arm64-kprobes-and-module-loading.patch`（22 文件，含 `arch/arm64/um/kernel-strings.c`）。
 > 正文用英文，便于上游阅读；中文备注只在本文件里。
 
 ## 标题
@@ -118,7 +118,7 @@ runtime verification (`insmod`/`rmmod`, a probe firing, a kretprobe returning th
 trampoline) is being run on the target device now — I will report the results here rather
 than claim them silently.
 
-Patch attached (`0001-um-arm64-kprobes-and-module-loading.patch`, 21 files). Happy to
+Patch attached (`0001-um-arm64-kprobes-and-module-loading.patch`, 22 files). Happy to
 split it per layer, or to move the trap entry out of `os-Linux/signal.c` if you would
 rather have it in `arch/um/drivers`.
 
