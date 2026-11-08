@@ -33,6 +33,44 @@ want = [
     ('fs/ext4/sysfs.c',            'EXPORT_SYMBOL_GPL(ext4_unregister_sysfs);'),
 ]
 
+# 第三批：SELinux 内部符号。模块要在内核里读/改写 policydb 才能做 sepolicy 伪造，
+# GKI 把这一整套都导出了（android/abi_gki_aarch64_* 里能查到），上游内核没有。
+# 这确实把「任何 GPL 模块都能重写安全策略」这条路打开了 —— 和 GKI 同样的取舍。
+for sym in ('avtab_alloc avtab_destroy avtab_insert_nonunique avtab_search_node '
+            'avtab_search_node_next').split():
+    want.append(('security/selinux/ss/avtab.c', 'EXPORT_SYMBOL_GPL(%s);' % sym))
+for sym in ('ebitmap_contains ebitmap_destroy ebitmap_equal ebitmap_get_bit '
+            'ebitmap_set_bit').split():
+    want.append(('security/selinux/ss/ebitmap.c', 'EXPORT_SYMBOL_GPL(%s);' % sym))
+for sym in ('policydb_context_isvalid policydb_destroy policydb_filenametr_search '
+            'policydb_load_isids policydb_read policydb_write').split():
+    want.append(('security/selinux/ss/policydb.c', 'EXPORT_SYMBOL_GPL(%s);' % sym))
+for sym in ('sidtab_context_to_sid sidtab_destroy sidtab_search_entry '
+            'sidtab_sid2str_get sidtab_sid2str_put').split():
+    want.append(('security/selinux/ss/sidtab.c', 'EXPORT_SYMBOL_GPL(%s);' % sym))
+for sym in ('mls_compute_context_len mls_context_to_sid mls_sid_to_context').split():
+    want.append(('security/selinux/ss/mls.c', 'EXPORT_SYMBOL_GPL(%s);' % sym))
+for sym in ('symtab_insert symtab_search').split():
+    want.append(('security/selinux/ss/symtab.c', 'EXPORT_SYMBOL_GPL(%s);' % sym))
+for sym in ('avc_has_perm avc_ss_reset').split():
+    want.append(('security/selinux/avc.c', 'EXPORT_SYMBOL_GPL(%s);' % sym))
+for sym in ('selinux_state selinux_blob_sizes').split():
+    want.append(('security/selinux/hooks.c', 'EXPORT_SYMBOL_GPL(%s);' % sym))
+want += [
+    ('security/selinux/status.c',   'EXPORT_SYMBOL_GPL(selinux_status_update_policyload);'),
+    ('security/selinux/netlink.c',  'EXPORT_SYMBOL_GPL(selnl_notify_policyload);'),
+    ('security/selinux/ss/services.c', 'EXPORT_SYMBOL_GPL(security_bounded_transition);'),
+    ('security/selinux/ss/hashtab.c', 'EXPORT_SYMBOL_GPL(__hashtab_insert);'),
+    ('security/selinux/ss/conditional.c', 'EXPORT_SYMBOL_GPL(cond_compute_av);'),
+]
+# 第三批的尾巴：几个非 SELinux 的小件，同样是 GKI 导出、这里没有。
+want += [
+    ('kernel/pid.c',               'EXPORT_SYMBOL_GPL(change_pid);'),
+    ('kernel/pid.c',               'EXPORT_SYMBOL_GPL(free_pids);'),
+    ('lib/is_single_threaded.c',   'EXPORT_SYMBOL_GPL(current_is_single_threaded);'),
+    ('kernel/sys.c',               'EXPORT_SYMBOL_GPL(uts_sem);'),
+]
+
 for rel, line in want:
     f = K / rel
     assert f.is_file(), '缺文件 %s' % rel
