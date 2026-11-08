@@ -46,6 +46,9 @@ if [ -z "${ROOTFS_GZ:-}" ] && [ -n "${ROOTFS:-}" ] && [ -f "${ROOTFS}" ]; then
 	echo "== gzip $ROOTFS =="
 	gzip -1 -c "$ROOTFS" > "$ROOTFS_GZ"
 fi
+# ROOTFS 可能是空的（verify_only 或本机没准备根盘），而后面无条件引用
+# $ROOTFS_GZ；-u 会在那里直接退出，所以这里给它一个确定的空值。
+ROOTFS_GZ=${ROOTFS_GZ:-}
 INITRAMFS=${INITRAMFS:-$A/initramfs-alpine.cpio.gz}
 
 for t in "$BT/aapt2" "$BT/d8" "$BT/apksigner"; do
