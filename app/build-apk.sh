@@ -141,16 +141,25 @@ zip -q -0 -r staged.apk lib
 zip -q -9 -r staged.apk assets
 
 echo "== signing =="
-KS="$HERE/debug.keystore"
+# 签名密钥必须是长期固定的这一把。APK 换了签名，手机上就只能先卸载再装，
+# 而 filesDir 里的 android.ext4（4G 红药丸系统盘）会跟着一起没 —— 上一版的
+# 「没有就 keytool 现生成」正是每次 CI 换一把新密钥的根，别再改回去。
+# 仓库是私有的，密钥随仓库走（口令 droidvmdroidvm）；要改用别的密钥，指
+# DROIDVM_KS=/path/to/xxx.jks。
+KS=${DROIDVM_KS:-$HERE/keystore.jks}
 if [ ! -f "$KS" ]; then
-	keytool -genkeypair -keystore "$KS" -storepass droidvmdroidvm -keypass droidvmdroidvm \
-		-alias droidvm -keyalg RSA -keysize 2048 -validity 10000 \
-		-dname "CN=DroidVM, OU=dev, O=DroidVM, L=x, S=x, C=xx" >/dev/null 2>&1
+	echo "build-apk: 没有签名密钥 $KS —— 不临时生成，先把它补回来" >&2
+	exit 2
 fi
 
 "$BT/zipalign" -f -p 4 staged.apk aligned.apk >/dev/null 2>&1 || cp staged.apk aligned.apk
 "$BT/apksigner" sign --ks "$KS" --ks-pass pass:droidvmdroidvm --key-pass pass:droidvmdroidvm \
 	--min-sdk-version 29 --out "$APK" aligned.apk || exit 2
+
+# 把签名证书指纹打进日志：相邻两次构建的这一行相同，才说明「覆盖安装」
+# 还能保住 App 的数据目录。
+"$BT/apksigner" verify --print-certs "$APK" 2>/dev/null \
+	| sed -n 's/^Signer #1 certificate SHA-256 digest: /签名证书 SHA-256: /p'
 
 echo
 echo "APK: $APK  ($(du -h "$APK" | cut -f1))"
