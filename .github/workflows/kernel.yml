@@ -241,9 +241,14 @@ jobs:
           # 只在编 .ko 时用 make 变量传，这也是 LKM 形态升级的基础。
           # -k 让 make 一次跑完所有源文件：UML 上第一次编 kernelsu.ko 一定会
           # 撞上多处 arm64 假设，一个一个试要跑很多趟 CI。失败时把 error 去重打出来。
+          # 快路只有 modules_prepare，没有 vmlinux / Module.symvers，modpost 会把
+          # 每个内核符号都判为 undefined（连 _printk 都是）。快路只用来收敛编译
+          # 错误，所以把 undefined 降级成警告；全量构建照旧严格，产物才可信。
+          MPOST=""
+          if [ "${{ inputs.modules_only }}" = "true" ]; then MPOST="KBUILD_MODPOST_WARN=1"; fi
           if ! make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1 \
                HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ \
-               M="$GITHUB_WORKSPACE/sukisu/kernel" CONFIG_KSU=m CONFIG_KPM=y \
+               M="$GITHUB_WORKSPACE/sukisu/kernel" CONFIG_KSU=m CONFIG_KPM=y  $MPOST \
                -j"$(nproc)" -k modules > "$ART/kernelsu.log" 2>&1; then
             echo "===== kernelsu.ko 编译失败，去重后的错误 ====="
             grep -aE "error:|fatal error|Error [0-9]" "$ART/kernelsu.log" \
@@ -262,7 +267,7 @@ jobs:
           tail -3 "$ART/kernelsu.log"
           if ! make -C "$TREE" O="$O" ARCH=um SUBARCH=arm64 LLVM=1 \
                HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ \
-               M="$GITHUB_WORKSPACE/kernel/testmod" \
+               M="$GITHUB_WORKSPACE/kernel/testmod"  $MPOST \
                -j"$(nproc)" -k modules > "$ART/testmod.log" 2>&1; then
             echo "===== kprobe-test.ko 编译失败 ====="
             grep -aE "error:|fatal error|Error [0-9]" "$ART/testmod.log" \
@@ -309,6 +314,7 @@ jobs:
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.modules_only }}
         with:
           name: um-gki618-${{ inputs.pages4k == true && '4k' || '16k' }}
           path: |
