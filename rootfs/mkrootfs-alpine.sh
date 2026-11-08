@@ -75,7 +75,18 @@ cat > root/etc/inittab <<'INITTAB'
 ::sysinit:/bin/hostname droidvm
 ::sysinit:/bin/echo droidvm-init: 标准-init-已接管（busybox-init+inittab）>/dev/kmsg
 # App 不是真终端，不走 getty/login 那套提示；sh -l 会读 /etc/profile 拿到 PATH、PS1。
-tty0::respawn:/bin/sh -l
+# UML console 占 TTY_MAJOR(4) minor 0，/dev/console 是 5:1。VT 关掉之后
+# devtmpfs 未必替我们建这两个节点，busybox init 打不开控制终端就静默跳过，
+# 表现正是「接管之后什么都没有」。已存在的 mknod 会 EEXIST，无害。
+::sysinit:/bin/mknod -m 620 /dev/tty0 c 4 0
+::sysinit:/bin/mknod -m 620 /dev/console c 5 1
+::sysinit:/bin/ls -l /dev/tty0 /dev/console /dev/tty >/dev/kmsg 2>&1
+::sysinit:/bin/cat /proc/consoles >/dev/kmsg 2>&1
+# init 是先 exec /bin/sh -c "<这一行>" 的，所以 $$ 能展开、重定向也能用。
+# 这行 echo 一出现，就说明子进程确实被拉起来了，问题只在 tty 本身。
+tty0::respawn:/bin/sh -c 'echo droidvm: tty0-shell-已拉起 pid=$$ >/dev/kmsg; exec /bin/sh -l'
+# 备用：tty0 这条还不通就换成 console 这个 id 再试。
+#console::respawn:/bin/sh -l
 ::ctrlaltdel:/bin/reboot
 ::shutdown:/bin/umount -a -r
 INITTAB
