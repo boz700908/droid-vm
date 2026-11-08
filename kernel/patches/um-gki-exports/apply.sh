@@ -14,7 +14,8 @@ K = pathlib.Path(sys.argv[1])
 want = [
     ('fs/namespace.c',             'EXPORT_SYMBOL_GPL(mntns_operations);'),
     ('fs/nsfs.c',                  'EXPORT_SYMBOL_GPL(ns_get_path);'),
-    ('fs/open.c',                  'EXPORT_SYMBOL_GPL(__arm64_sys_close);'),
+    # __arm64_sys_close 不是「导出」能解决的：UML 根本没这个函数，
+    # 由 um-syscall-shim/ 补一个真蹦床。
     ('kernel/kallsyms.c',          'EXPORT_SYMBOL_GPL(kallsyms_lookup_size_offset);'),
     ('mm/maccess.c',               'EXPORT_SYMBOL_GPL(strncpy_from_user_nofault);'),
     # sys_enter 事件本身在，只是没人导出过；模块靠它注册 syscall 钩子。

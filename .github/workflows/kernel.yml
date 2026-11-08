@@ -95,6 +95,8 @@ jobs:
           bash "$GITHUB_WORKSPACE/kernel/patches/um-strings/apply.sh" "$GITHUB_WORKSPACE/ksrc"
           # GKI 有导出、这棵树没导出的那批符号
           bash "$GITHUB_WORKSPACE/kernel/patches/um-gki-exports/apply.sh" "$GITHUB_WORKSPACE/ksrc"
+          # UML 没有 __arm64_sys_* 蹦床，模块从内核态调 syscall 需要它们
+          bash "$GITHUB_WORKSPACE/kernel/patches/um-syscall-shim/apply.sh" "$GITHUB_WORKSPACE/ksrc"
           # 补丁跑完自检：字段式寄存器访问必须一个不剩（UML 的 regs 不是数组）。
           if grep -rn -- "->__PT_" --include='*.c' kernel | grep -v '^kernel/include/ksu-arch.h'; then
             echo "还有字段式寄存器访问没改干净"; exit 1
