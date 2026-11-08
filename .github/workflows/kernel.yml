@@ -66,6 +66,11 @@ jobs:
           git -C ksrc rev-parse HEAD | tee ksrc-sha.txt
 
       - name: 克隆 SukiSU Ultra（只用到 kernel/ 下的模块源码）
+        run: |
+          # kernelsu.ko 必须对着本内核自己编，管理器那边才能选文件安装/升级。
+          git clone --depth 1 "$SUKISU" sukisu
+          git -C sukisu rev-parse HEAD | tee sukisu-sha.txt
+
       - name: 给 SukiSU 打 UML 兼容补丁
         run: |
           set -euo pipefail
@@ -75,10 +80,6 @@ jobs:
           if grep -rn -- "->__PT_" --include='*.c' kernel | grep -v '^kernel/include/arch.h'; then
             echo "还有字段式寄存器访问没改干净"; exit 1
           fi
-        run: |
-          # kernelsu.ko 必须对着本内核自己编，管理器那边才能选文件安装/升级。
-          git clone --depth 1 "$SUKISU" sukisu
-          git -C sukisu rev-parse HEAD | tee sukisu-sha.txt
 
       - name: 叠加我们的片段
         run: cp kernel/config/sukisu-lkm.config ksrc/tools/um-arm64/config/
