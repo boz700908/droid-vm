@@ -83,6 +83,13 @@ jobs:
           # ARCH=um 下 include/arch.h 会撞上内核自己的 arch/um/include/shared/arch.h；
           # syscall_fn_t 与 vdso 头也要补/绕。见脚本头部说明。
           python3 "$GITHUB_WORKSPACE/kernel/patches/sukisu-um/um-compat.py" kernel
+          # arch 钩子层（hook/arm64/*）在 ARCH=um 下不编译，缺的 ksu_patch_text /
+          # ksu_syscall_table / ksu_syscall_hook_init 用一份「明确不支持」的实现顶上。
+          python3 "$GITHUB_WORKSPACE/kernel/patches/sukisu-um/um-hook-stub.py" kernel
+          # 目标内核是 GKI 风格，VFS 内部符号的命名空间带 ANDROID_GKI_ 前缀。
+          python3 "$GITHUB_WORKSPACE/kernel/patches/sukisu-um/um-ns-import.py" kernel
+          # 内核侧：path_umount 在 mainline 没有导出，而 SukiSU 直接调用它。
+          bash "$GITHUB_WORKSPACE/kernel/patches/um-exports/apply.sh" ksrc
           # 补丁跑完自检：字段式寄存器访问必须一个不剩（UML 的 regs 不是数组）。
           if grep -rn -- "->__PT_" --include='*.c' kernel | grep -v '^kernel/include/ksu-arch.h'; then
             echo "还有字段式寄存器访问没改干净"; exit 1
@@ -262,6 +269,17 @@ jobs:
                    V=1 -k "${bad%.c}.o" 2>&1 | grep -a 'clang' | head -1 \
                 | tr ' ' '\n' | grep -E '^-I|^-D|^-include' | head -40
             fi
+            # modpost 一次只打 10 条 undefined 就封嘴，剩下的看不见。自己算一遍：
+            # 模块全部 undefined − 内核 Module.symvers 导出 = 要补的完整清单；
+            # 顺带打 symvers 条数与关键 CONFIG，判断是不是内核压根没导出。
+            echo "===== 仍未解析的符号（模块 undefined − 内核导出）====="
+            "$TOOL/llvm-nm" --undefined-only $(find "$GITHUB_WORKSPACE/sukisu/kernel" -name '*.o') 2>/dev/null \
+              | awk '$1=="U"{print $2}' | sed 's/@.*//' | sort -u > /tmp/undef.txt || true
+            awk '{print $2}' "$O/Module.symvers" 2>/dev/null | sed 's/@.*//' | sort -u > /tmp/exp.txt || true
+            comm -23 /tmp/undef.txt /tmp/exp.txt | tr '\n' ' ' | cut -c1-3000; echo
+            echo "内核导出条数: $(wc -l < /tmp/exp.txt)"
+            grep -E '^CONFIG_MODULES=|^CONFIG_TRIM_UNUSED_KSYMS=|^# CONFIG_TRIM_UNUSED_KSYMS' \
+              "$O/.config" || true
             exit 1
           fi
           tail -3 "$ART/kernelsu.log"
