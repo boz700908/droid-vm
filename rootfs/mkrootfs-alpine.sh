@@ -130,6 +130,12 @@ androidboot.redroid_fps=${REDROID_FPS:-30} \
 androidboot.use_redroid_overlayfs=1 androidboot.selinux=permissive \
 ro.secure=0 ro.adb.secure=0"
 
+# 用 pivot_root 而不是 chroot：在 UML 上 chroot 之后再 unshare(CLONE_NEWNS) 并
+# setns 回原命名空间，fs->root 会失效（nsprobe 实测：回切后 /android 下全部 ENOENT）。
+# 而 Android init 的 NeedsTwoMountNamespaces() 恒为 true，必然走这条 unshare→setns
+# 的路，于是 /bootstrap-apex → /apex 的 bind 全部 ENOENT、APEX 挂不上。pivot_root
+# 让新根成为本命名空间真正的 root，fs->root 不再悬空（实测 PIVOT OK 后 init 日志
+# 从 45 行涨到 293 行、APEX 的四个 loop 全部以 ro 挂上）。
 exec unshare --mount --pid --fork --propagation private /bin/sh -c '
   set -eu
   mount --make-rprivate /
@@ -148,8 +154,17 @@ exec unshare --mount --pid --fork --propagation private /bin/sh -c '
     echo '"$ARGS"' | tr " " "\n" > /tmp/redroid-bootconfig
     mount --bind /tmp/redroid-bootconfig '"$MNT"'/proc/bootconfig
   fi
-  exec chroot '"$MNT"' /init '"$ARGS"'
+  # pivot_root 的 put_old 必须事先存在，否则只会拿到 ENOENT（不是内核拒绝）
+  mkdir -p '"$MNT"'/.oldroot
+  if ! pivot_root '"$MNT"' '"$MNT"'/.oldroot 2>/tmp/pivot.err; then
+    echo "redroid-up: pivot_root 失败: $(cat /tmp/pivot.err 2>/dev/null) —— 回落 chroot" >/dev/kmsg 2>/dev/null || true
+    exec chroot '"$MNT"' /init '"$ARGS"'
+  fi
+  cd /
+  umount -l /.oldroot 2>/dev/null || true
+  exec /init '"$ARGS"'
 '
+
 REDROIDUP
 chmod 755 root/sbin/redroid-up
 
