@@ -39,7 +39,7 @@ fi
 #   gcompat            glibc 兜底，万一要跑官方预编译二进制
 # 故意不装 openrc：M0/M1 用不到服务管理，需要时再加，并把 inittab 里的
 # openrc sysinit/boot/default 三行恢复。
-GUEST_PKGS=${GUEST_PKGS:-util-linux util-linux-misc android-tools curl}
+GUEST_PKGS=${GUEST_PKGS:-util-linux util-linux-misc android-tools curl python3}
 if [ -n "$GUEST_PKGS" ]; then
   # 仓库版本跟着根盘走，免得 ALPINE_VER 改了而这里还用老版本号。
   VER=$(cut -d. -f1,2 root/etc/alpine-release)
@@ -70,7 +70,7 @@ fi
 # 换掉：sysinit 自己挂文件系统，tty0 上 respawn 一个登录 shell。
 # 以后要用服务管理（sshd、redroid 之类），apk add openrc 后把原版那三行
 # openrc sysinit/boot/default 加回来即可。
-# 隧道对端（Python，镜像里本来就有 python3）。装进 /usr/local/bin，
+# 隧道对端（Python 由上面的 GUEST_PKGS 显式装进根盘）。装进 /usr/local/bin，
 # 由 inittab 在共享目录挂上之后拉起来；挂不上就什么都不做。
 [ -f "$SRC/guest-agent.py" ] || {
   echo "mkrootfs: 找不到 $SRC/guest-agent.py" >&2; exit 1; }
@@ -136,7 +136,7 @@ ro.secure=0 ro.adb.secure=0"
 # 的路，于是 /bootstrap-apex → /apex 的 bind 全部 ENOENT、APEX 挂不上。pivot_root
 # 让新根成为本命名空间真正的 root，fs->root 不再悬空（实测 PIVOT OK 后 init 日志
 # 从 45 行涨到 293 行、APEX 的四个 loop 全部以 ro 挂上）。
-exec unshare --mount --pid --fork --propagation private /bin/sh -c '
+exec unshare --mount --pid --fork --wait --propagation private /bin/sh -c '
   set -eu
   mount --make-rprivate /
   for d in dev sys; do
@@ -167,6 +167,22 @@ exec unshare --mount --pid --fork --propagation private /bin/sh -c '
 
 REDROIDUP
 chmod 755 root/sbin/redroid-up
+mkdir -p root/var/log
+
+cat > root/sbin/droidvm-boot <<'DROIDVMBOOT'
+#!/bin/sh
+# /sbin/droidvm-boot —— tty0 的唯一前台所有者。
+# 有 android.ext4（App 用 ubd1= 传进来的 /dev/ubdb）就把控制台整个交给 Android；
+# 没有就给一个交互 shell 当逃生通道。两条路都是阻塞/exec，不存在「后台还有个
+# ash 在读同一个 tty」——那正是之前 getprop 被按字符啃碎的根源。
+set -u
+if [ -b /dev/ubdb ]; then
+  /sbin/redroid-up /dev/ubdb
+  echo "droidvm-boot: redroid-up 返回 $?，回落到交互 shell" >/dev/kmsg 2>/dev/null || true
+fi
+exec /bin/sh -l
+DROIDVMBOOT
+chmod 755 root/sbin/droidvm-boot
 
 cat > root/etc/inittab <<'INITTAB'
 # /etc/inittab —— droidvm guest
@@ -174,30 +190,28 @@ cat > root/etc/inittab <<'INITTAB'
 ::sysinit:/bin/mount -t sysfs sysfs /sys
 # /dev 由 devtmpfs 挂上后会把镜像里的目录整个遮住，pts 得先建再挂，
 # 否则就是 mount: devpts on /dev/pts failed: No such file or directory。
-::sysinit:/bin/mkdir -p /dev/pts /dev/shm
-::sysinit:/bin/mount -t devpts devpts /dev/pts
-::sysinit:/bin/mount -t tmpfs tmpfs /tmp
-::sysinit:/bin/mount -t tmpfs tmpfs /run
+::sysinit:/bin/sh -c 'mount -t devtmpfs devtmpfs /dev 2>/dev/null || true'
+::sysinit:/bin/mkdir -p /dev/pts /dev/shm /dev/mqueue
+::sysinit:/bin/mount -t devpts devpts /dev/pts -o gid=5,mode=620
+::sysinit:/bin/mount -t tmpfs tmpfs /dev/shm -o mode=1777,size=256M
+::sysinit:/bin/busybox ln -sf pts/ptmx /dev/ptmx
+::sysinit:/bin/mount -t tmpfs tmpfs /run -o mode=755
+::sysinit:/bin/mount -t tmpfs tmpfs /tmp -o mode=1777,size=512M
+::sysinit:/bin/mkdir -p /sys/fs/cgroup
+::sysinit:/bin/sh -c 'mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true; echo "+cpu +memory +io +pids" > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true; echo "droidvm: cgroup2 $(mountpoint -q /sys/fs/cgroup && echo ok || echo NO) 控制器=[$(cat /sys/fs/cgroup/cgroup.controllers 2>/dev/null)]" >/dev/kmsg'
 ::sysinit:/bin/hostname droidvm
-# 共享目录：App 把 filesDir/share 的绝对路径塞进内核命令行（droidvm_share=），
-# 这里用 hostfs 挂到 /mnt/host —— 两边看到同一份文件，隧道、文件注入都靠它。
-# 没传就跳过，不报错：老版本的 App 不会带这个参数。
+::sysinit:/bin/sh -c 'echo 1 4 1 7 > /proc/sys/kernel/printk; echo 0 > /proc/sys/kernel/printk_ratelimit 2>/dev/null || true'
 ::sysinit:/bin/mkdir -p /mnt/host
 ::sysinit:/bin/sh -c 'S=$(sed -n "s/.*droidvm_share=\([^ ]*\).*/\1/p" /proc/cmdline); if [ -n "$S" ]; then { mount -t hostfs hostfs /mnt/host -o "hostfs=$S" || mount -t hostfs hostfs /mnt/host -o "$S"; } && echo "droidvm: 共享目录 $S 已挂到 /mnt/host" >/dev/kmsg || echo "droidvm: 共享目录 $S 挂载失败" >/dev/kmsg; else echo "droidvm: 命令行没有 droidvm_share，跳过共享目录" >/dev/kmsg; fi'
+::sysinit:/bin/sh -c 'S=$(sed -n "s/.*droidvm_share=\([^ ]*\).*/\1/p" /proc/cmdline); if [ -n "$S" ]; then T=$(stat -c %y "$S" 2>/dev/null | cut -c1-19); [ -n "$T" ] && date -s "$T" >/dev/null 2>&1; fi; echo "droidvm: 时钟 [$(date +%Y-%m-%dT%H:%M:%S)]" >/dev/kmsg'
 ::sysinit:/bin/echo droidvm-init: 标准-init-已接管（busybox-init+inittab）>/dev/kmsg
-# 共享目录一旦挂上就把隧道对端拉起来；没挂就说明这一版 App 没传参数，跳过。
-::sysinit:/bin/sh -c 'mountpoint -q /mnt/host && { setsid python3 /usr/local/bin/guest-agent.py </dev/null >/dev/null 2>&1 & echo "droidvm: 隧道对端已拉起" >/dev/kmsg; } || true'
-# App 不是真终端，不走 getty/login 那套提示；sh -l 会读 /etc/profile 拿到 PATH、PS1。
-# UML console 占 TTY_MAJOR(4) minor 0，/dev/console 是 5:1。VT 关掉之后
-# devtmpfs 未必替我们建这两个节点，busybox init 打不开控制终端就静默跳过，
-# 表现正是「接管之后什么都没有」。已存在的 mknod 会 EEXIST，无害。
+::sysinit:/bin/sh -c 'mountpoint -q /mnt/host || exit 0; command -v python3 >/dev/null 2>&1 || { echo "droidvm: 根盘没有 python3，隧道不可用" >/dev/kmsg; exit 0; }; setsid python3 /usr/local/bin/guest-agent.py </dev/null >/var/log/guest-agent.log 2>&1 & sleep 1; if pgrep -f guest-agent.py >/dev/null 2>&1; then echo "droidvm: 隧道对端已拉起" >/dev/kmsg; else echo "droidvm: 隧道对端启动失败，见 /var/log/guest-agent.log" >/dev/kmsg; fi'
 ::sysinit:/bin/mknod -m 620 /dev/tty0 c 4 0
 ::sysinit:/bin/mknod -m 620 /dev/console c 5 1
 ::sysinit:/bin/ls -l /dev/tty0 /dev/console /dev/tty >/dev/kmsg 2>&1
 ::sysinit:/bin/cat /proc/consoles >/dev/kmsg 2>&1
-# init 是先 exec /bin/sh -c "<这一行>" 的，所以 $$ 能展开、重定向也能用。
-# 这行 echo 一出现，就说明子进程确实被拉起来了，问题只在 tty 本身。
-tty0::respawn:/bin/sh -c 'echo droidvm: tty0-shell-已拉起 pid=$$ >/dev/kmsg; exec /bin/sh -l'
+::sysinit:/bin/sh -c 'for m in /proc /sys /dev /dev/pts /dev/shm /run /tmp /sys/fs/cgroup /mnt/host; do printf "droidvm: mount %-16s %s\n" "$m" "$(mountpoint -q "$m" && echo ok || echo NO)"; done >/dev/kmsg'
+tty0::respawn:/sbin/droidvm-boot
 # 备用：tty0 这条还不通就换成 console 这个 id 再试。
 #console::respawn:/bin/sh -l
 ::ctrlaltdel:/bin/reboot
