@@ -12,6 +12,7 @@ import base64
 import json
 import os
 import shutil
+import subprocess
 import time
 
 RPC = os.environ.get("DROIDVM_RPC", "/mnt/host/rpc")
@@ -88,6 +89,28 @@ def handle_request(req):
     if op == "rename":
         os.replace(_abs(req, "from"), _abs(req, "to"))
         return {"ok": True}
+    if op == "exec":
+        # 逃生通道的核心：Android 占着 tty0 的时候，App 只能从这里进来。
+        # 本进程活在 Alpine 的挂载命名空间里（redroid-up 的 pivot_root 只影响
+        # 它自己 unshare 出来的那个命名空间），所以 Android 起来了照样能在这里
+        # 跑命令：看 dmesg、umount、kill，都是 Alpine 侧的视角。
+        cmd = req.get("cmd")
+        if not isinstance(cmd, str) or not cmd.strip():
+            raise ValueError("cmd 不能为空")
+        t = int(req.get("timeout") or 20)
+        t = max(1, min(t, 120))
+        try:
+            p = subprocess.run(["/bin/sh", "-c", cmd], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               timeout=t)
+        except subprocess.TimeoutExpired as e:
+            partial = (e.stdout or b"").decode("utf-8", "replace")
+            return {"ok": False, "err": "超时（%d 秒）" % t, "rc": -1,
+                    "out": partial[:200000]}
+        out = p.stdout.decode("utf-8", "replace")
+        if len(out) > 200000:
+            out = out[:200000] + "\n…（输出超过 200000 字节，已截断）"
+        return {"ok": True, "rc": p.returncode, "out": out}
     raise ValueError("不认识的 op: %r" % (op,))
 
 

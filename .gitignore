@@ -4,3 +4,4 @@ out/
 *.ext4
 *.ext4.gz
 *.cpio.gz
+__pycache__/

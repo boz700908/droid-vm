@@ -136,9 +136,15 @@ ro.secure=0 ro.adb.secure=0"
 # 的路，于是 /bootstrap-apex → /apex 的 bind 全部 ENOENT、APEX 挂不上。pivot_root
 # 让新根成为本命名空间真正的 root，fs->root 不再悬空（实测 PIVOT OK 后 init 日志
 # 从 45 行涨到 293 行、APEX 的四个 loop 全部以 ro 挂上）。
-exec unshare --mount --pid --fork --wait --propagation private /bin/sh -c '
+# 这里用的 unshare 是 /bin/unshare，也就是 busybox 的 applet：busybox init 给的
+# PATH 是 /sbin:/usr/sbin:/bin:/usr/bin，/bin 排在 /usr/bin 前面，所以根盘里
+# util-linux 那份 unshare 永远轮不到。busybox 的 unshare 只认 -m -p -f，没有
+# --wait，也没有 --propagation（写上去就是 "unrecognized option"，直接在手机上
+# 起不来）。实测 busybox 1.35 的 -f 会 wait 子进程，正是这里要的阻塞语义；
+# --propagation private 由图里第一行 mount --make-rprivate 完成，等价。
+exec unshare -m -p -f /bin/sh -c '
   set -eu
-  mount --make-rprivate /
+  mount --make-rprivate / 2>/dev/null || true
   for d in dev sys; do
     mkdir -p '"$MNT"'/$d
     mount --rbind /$d '"$MNT"'/$d
@@ -205,7 +211,7 @@ cat > root/etc/inittab <<'INITTAB'
 ::sysinit:/bin/sh -c 'S=$(sed -n "s/.*droidvm_share=\([^ ]*\).*/\1/p" /proc/cmdline); if [ -n "$S" ]; then { mount -t hostfs hostfs /mnt/host -o "hostfs=$S" || mount -t hostfs hostfs /mnt/host -o "$S"; } && echo "droidvm: 共享目录 $S 已挂到 /mnt/host" >/dev/kmsg || echo "droidvm: 共享目录 $S 挂载失败" >/dev/kmsg; else echo "droidvm: 命令行没有 droidvm_share，跳过共享目录" >/dev/kmsg; fi'
 ::sysinit:/bin/sh -c 'S=$(sed -n "s/.*droidvm_share=\([^ ]*\).*/\1/p" /proc/cmdline); if [ -n "$S" ]; then T=$(stat -c %y "$S" 2>/dev/null | cut -c1-19); [ -n "$T" ] && date -s "$T" >/dev/null 2>&1; fi; echo "droidvm: 时钟 [$(date +%Y-%m-%dT%H:%M:%S)]" >/dev/kmsg'
 ::sysinit:/bin/echo droidvm-init: 标准-init-已接管（busybox-init+inittab）>/dev/kmsg
-::sysinit:/bin/sh -c 'mountpoint -q /mnt/host || exit 0; command -v python3 >/dev/null 2>&1 || { echo "droidvm: 根盘没有 python3，隧道不可用" >/dev/kmsg; exit 0; }; setsid python3 /usr/local/bin/guest-agent.py </dev/null >/var/log/guest-agent.log 2>&1 & sleep 1; if pgrep -f guest-agent.py >/dev/null 2>&1; then echo "droidvm: 隧道对端已拉起" >/dev/kmsg; else echo "droidvm: 隧道对端启动失败，见 /var/log/guest-agent.log" >/dev/kmsg; fi'
+::sysinit:/bin/sh -c 'mountpoint -q /mnt/host || exit 0; command -v python3 >/dev/null 2>&1 || { echo "droidvm: 根盘没有 python3，隧道不可用" >/dev/kmsg; exit 0; }; setsid sh -c "while :; do python3 /usr/local/bin/guest-agent.py; sleep 2; done" </dev/null >>/var/log/guest-agent.log 2>&1 & sleep 2; if [ -d /mnt/host/rpc/in ]; then echo "droidvm: 隧道已就绪（rpc/in 已建）" >/dev/kmsg; else echo "droidvm: 隧道未就绪，见 /var/log/guest-agent.log" >/dev/kmsg; fi'
 ::sysinit:/bin/mknod -m 620 /dev/tty0 c 4 0
 ::sysinit:/bin/mknod -m 620 /dev/console c 5 1
 ::sysinit:/bin/ls -l /dev/tty0 /dev/console /dev/tty >/dev/kmsg 2>&1

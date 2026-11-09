@@ -53,6 +53,9 @@ import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPInputStream;
+import org.json.JSONObject;
+import java.io.FileInputStream;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A Linux kernel, running inside an ordinary Android app.
@@ -87,6 +90,10 @@ public class MainActivity extends Activity {
     private CheckBox usbBox;
     private CheckBox initBox;
     private Button startStop;
+    private CheckBox tunnelBox;
+    /* 隧道：走 hostfs 共享目录里的 rpc/in、rpc/out 中转，不碰 tty0。 */
+    private File shareDir;
+    private final AtomicLong rpcSeq = new AtomicLong();
 
     private Process guest;
     private OutputStream guestIn;
@@ -151,8 +158,10 @@ public class MainActivity extends Activity {
         memField.setId(View.generateViewId());
         memLabel.setLabelFor(memField.getId());
         memField.setInputType(InputType.TYPE_CLASS_NUMBER);
-        memField.setText("2048");
-        memField.setHint("2048");
+        /* 实测：4G 撑不到 zygote 稳定，Android 侧会 fdsan + SIGABRT 直接死。
+         * 8G 在 15.6G 的机器上验证过可用，所以默认就写 8192。 */
+        memField.setText("8192");
+        memField.setHint("8192");
         memField.setContentDescription("内存大小，单位兆字节");
         memField.setMinHeight(dp(48));
 
@@ -342,6 +351,20 @@ public class MainActivity extends Activity {
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
         /* --- 输入行，接到 guest 的 stdin --- */
+        /* --- 隧道开关 ---
+         * 内核命令行是 con=null con0=fd:0,fd:1，底部输入框写的就是 tty0 的同一条
+         * stdin；Android 一起来就把控制台接过去，这条通道就哑了。勾上这个框之后
+         * 命令不再走 tty0，而是经共享目录交给 guest 里常驻的隧道进程，它活在
+         * Alpine 的挂载命名空间里（pivot_root 只影响 redroid-up 自己那个），
+         * 所以 Android 占着控制台时照样能用。默认不勾，老路径完全不变。 */
+        tunnelBox = new CheckBox(this);
+        tunnelBox.setText("经隧道发给 Alpine（Android 起来后也能用）");
+        tunnelBox.setContentDescription("经隧道发给 Alpine");
+        tunnelBox.setMinHeight(dp(48));
+        tunnelBox.setChecked(false);
+        root.addView(tunnelBox, new LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+
         input = new EditText(this);
         input.setHint("输入命令，按软键盘的发送键发出");
         input.setContentDescription("发给 guest 的命令");
@@ -1051,7 +1074,92 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * 一次隧道往返：把 req 写进 <share>/rpc/in，等 guest 把同名结果写到 rpc/out。
+     * 请求先落到 rpc/tmp 再改名，guest 那边永远不会读到写了一半的文件。
+     */
+    private JSONObject rpc(JSONObject req, int timeoutMs) throws Exception {
+        /* 与内核命令行里 droidvm_share= 指同一个目录（getFilesDir()/share）。 */
+        File share = shareDir != null ? shareDir : new File(getFilesDir(), "share");
+        shareDir = share;
+        File in = new File(share, "rpc/in");
+        File out = new File(share, "rpc/out");
+        File tmp = new File(share, "rpc/tmp");
+        for (File d : new File[]{in, out, tmp}) {
+            if (!d.isDirectory() && !d.mkdirs() && !d.isDirectory())
+                throw new IOException("建不出目录 " + d);
+        }
+        String name = String.format(Locale.US, "a%010d-%04d.req",
+                rpcSeq.incrementAndGet(), (int) (System.nanoTime() % 10000));
+        File part = new File(tmp, name + ".part");
+        FileOutputStream fo = new FileOutputStream(part);
+        try {
+            fo.write(req.toString().getBytes("UTF-8"));
+            fo.flush();
+        } finally {
+            fo.close();
+        }
+        if (!part.renameTo(new File(in, name)))
+            throw new IOException("请求发不出去（改名到 rpc/in 失败）");
+        File resp = new File(out, name);
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (resp.isFile()) {
+                StringBuilder sb = new StringBuilder();
+                BufferedReader r = new BufferedReader(
+                        new InputStreamReader(new FileInputStream(resp), "UTF-8"));
+                try {
+                    String line;
+                    while ((line = r.readLine()) != null)
+                        sb.append(line).append('\n');
+                } finally {
+                    r.close();
+                }
+                resp.delete();
+                return new JSONObject(sb.toString().trim());
+            }
+            Thread.sleep(20);
+        }
+        throw new IOException("guest 没有应答（" + (timeoutMs / 1000) + " 秒超时）");
+    }
+
+    /** 经隧道执行一条命令；App 的版本输出走日志区，不进 tty0。 */
+    private void sendTunnel(final String cmd) {
+        final int timeoutS = 30;
+        append("$ [隧道] " + cmd + "\n");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    JSONObject req = new JSONObject();
+                    req.put("op", "exec");
+                    req.put("cmd", cmd);
+                    req.put("timeout", timeoutS);
+                    JSONObject r = rpc(req, (timeoutS + 15) * 1000);
+                    String out = r.optString("out", "");
+                    if (out.isEmpty())
+                        append("（无输出）\n");
+                    else
+                        append(out.endsWith("\n") ? out : out + "\n");
+                    if (r.optBoolean("ok", false))
+                        append("[退出码 " + r.optInt("rc", 0) + "]\n");
+                    else
+                        append("[隧道报错：" + r.optString("err", "未知") + "]\n");
+                } catch (Exception e) {
+                    append("[隧道不可用：" + e.getMessage() + "]\n");
+                }
+            }
+        }, "droidvm-tunnel").start();
+    }
+
     private void send(String s) {
+        /* 勾了隧道就走中转；没勾就还是原来那条 tty0 的 stdin。 */
+        if (tunnelBox != null && tunnelBox.isChecked()) {
+            String t = s.trim();
+            if (!t.isEmpty())
+                sendTunnel(t);
+            return;
+        }
         if (guestIn == null) {
             append("[not running]\n");
             announce("内核未运行，先按启动");
