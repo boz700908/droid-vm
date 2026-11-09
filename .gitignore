@@ -1,0 +1,6 @@
+work/
+artifacts/
+out/
+*.ext4
+*.ext4.gz
+*.cpio.gz
